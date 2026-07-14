@@ -1,7 +1,0 @@
-Specification name: init
-Description: Create initial project structure
-Specification instructions: tasks/init.md
-Research documents: tasks/init/research-*.md
-Implementation plan: tasks/init/implementation-plan.md
-Alternate implementation plans: tasks/init/implementation-plan[-b|-c|...].md
-Implementation plan phases: tasks/init/phase-[1|2|3|...].md
