@@ -1,2 +1,5 @@
+import uvicorn
+
 def main() -> None:
-    print("Hello from news!")
+
+    uvicorn.run("news.main:app", host="0.0.0.0", port=4090, reload=True)

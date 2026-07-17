@@ -1,0 +1,36 @@
+:root {
+  color-scheme: light;
+  font-family: Georgia, "Times New Roman", serif;
+  background: #f4f1ea;
+  color: #171717;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  display: grid;
+  min-height: 100vh;
+  min-height: 100dvh;
+  margin: 0;
+  padding: clamp(1.5rem, 6vw, 5rem);
+  place-items: center;
+}
+
+main {
+  width: 100%;
+  max-width: 48rem;
+  border-top: 0.25rem solid #9b2c2c;
+}
+
+h1 {
+  margin: 0;
+  padding-top: clamp(1rem, 3vw, 2rem);
+  font-size: clamp(2.25rem, 8vw, 5.5rem);
+  font-weight: 700;
+  line-height: 0.95;
+  letter-spacing: -0.04em;
+}
