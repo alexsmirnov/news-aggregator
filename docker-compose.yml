@@ -1,0 +1,37 @@
+services:
+  miniflux:
+    image: ${MINIFLUX_IMAGE:-miniflux/miniflux:latest}
+    container_name: miniflux
+    restart: always
+    ports:
+      - "4080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgres://miniflux:secret@db/miniflux?sslmode=disable
+      - RUN_MIGRATIONS=1
+      - CREATE_ADMIN=1
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=test123
+      - HTTP_CLIENT_USER_AGENT=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36
+      - DEBUG=1
+    # Optional health check:
+    # healthcheck:
+    #  test: ["CMD", "/usr/bin/miniflux", "-healthcheck", "auto"]
+  db:
+    image: postgres:latest
+    container_name: postgres
+    environment:
+      - POSTGRES_USER=miniflux
+      - POSTGRES_PASSWORD=secret
+      - POSTGRES_DB=miniflux
+    volumes:
+      - miniflux-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "miniflux"]
+      interval: 10s
+      start_period: 30s
+volumes:
+  miniflux-db:
+    external: true
