@@ -55,9 +55,7 @@ class LlmClient:
     async def chat(
         self, model: str, messages: list[dict[str, Any]], **kwargs: Any
     ) -> str | None:
-        sdk_messages = cast(
-            list[ChatCompletionMessageParam], messages
-        )
+        sdk_messages = cast(list[ChatCompletionMessageParam], messages)
 
         async def _do() -> str | None:
             response = await self.client.chat.completions.create(
@@ -74,9 +72,7 @@ class LlmClient:
         response_format: type[T],
         **kwargs: Any,
     ) -> T | None:
-        sdk_messages = cast(
-            list[ChatCompletionMessageParam], messages
-        )
+        sdk_messages = cast(list[ChatCompletionMessageParam], messages)
 
         async def _do() -> T | None:
             response = await self.client.chat.completions.parse(

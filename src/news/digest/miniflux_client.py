@@ -58,10 +58,12 @@ class MinifluxClient:
                 f"{self.base_url}/v1/categories"
             )
             response.raise_for_status()
-            for category in response.json():
-                if category["title"] == title:
-                    return category["id"]
-            raise LookupError(f"unknown miniflux category: {title}")
+            category = next(
+                (c for c in response.json() if c["title"] == title), None
+            )
+            if category is None:
+                raise LookupError(f"unknown miniflux category: {title}")
+            return category["id"]
 
         return await self._retrying(_do)
 

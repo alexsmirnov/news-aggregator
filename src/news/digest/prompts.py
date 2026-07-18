@@ -43,7 +43,5 @@ Provide more detailed summary here, including facts and opinions
 # Contradictory opinions ( if any )"""
 
 
-def refinement_user_prompt(
-    title: str, content: str, links: list[str]
-) -> str:
+def refinement_user_prompt(title: str, content: str, links: list[str]) -> str:
     return f"# {title}\n\n{content}\nsources: {' '.join(links)}"

@@ -1,5 +1,7 @@
 import ipaddress
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -33,6 +35,40 @@ logger = logging.getLogger(__name__)
 
 class PipelineError(Exception):
     pass
+
+
+@asynccontextmanager
+async def _miniflux_client(
+    settings: Settings, provided: MinifluxClient | None
+) -> AsyncIterator[MinifluxClient]:
+    """Yield an injected client untouched, else create and close our own."""
+    if provided is not None:
+        yield provided
+        return
+    client = MinifluxClient(
+        str(settings.miniflux_api_base), settings.miniflux_api_key
+    )
+    try:
+        yield client
+    finally:
+        await client.aclose()
+
+
+@asynccontextmanager
+async def _llm_client(
+    settings: Settings, provided: LlmClient | None
+) -> AsyncIterator[LlmClient]:
+    """Yield an injected client untouched, else create and close our own."""
+    if provided is not None:
+        yield provided
+        return
+    client = LlmClient(
+        settings.litellm_api_key, str(settings.litellm_router)
+    )
+    try:
+        yield client
+    finally:
+        await client.aclose()
 
 
 def strip_html(entry_content: str) -> str:
@@ -229,19 +265,10 @@ async def run_pipeline(
 ) -> Path:
     now = now or datetime.now(UTC)
     today = now.date()
-    owned_miniflux: MinifluxClient | None = None
-    owned_llm: LlmClient | None = None
-    try:
-        if miniflux is None:
-            owned_miniflux = MinifluxClient(
-                str(settings.miniflux_api_base), settings.miniflux_api_key
-            )
-            miniflux = owned_miniflux
-        if llm is None:
-            owned_llm = LlmClient(
-                settings.litellm_api_key, str(settings.litellm_router)
-            )
-            llm = owned_llm
+    async with (
+        _miniflux_client(settings, miniflux) as miniflux,
+        _llm_client(settings, llm) as llm,
+    ):
         entries = await fetch_entries(
             miniflux,
             category=aggregation.miniflux_category,
@@ -271,11 +298,6 @@ async def run_pipeline(
         return await write_digest(
             digest, settings.digest_output_dir, today, name=aggregation.name
         )
-    finally:
-        if owned_miniflux is not None:
-            await owned_miniflux.aclose()
-        if owned_llm is not None:
-            await owned_llm.aclose()
 
 
 async def run_all_aggregations(
@@ -286,20 +308,11 @@ async def run_all_aggregations(
     now: datetime | None = None,
 ) -> list[Path]:
     now = now or datetime.now(UTC)
-    owned_miniflux: MinifluxClient | None = None
-    owned_llm: LlmClient | None = None
     paths = []
-    try:
-        if miniflux is None:
-            owned_miniflux = MinifluxClient(
-                str(settings.miniflux_api_base), settings.miniflux_api_key
-            )
-            miniflux = owned_miniflux
-        if llm is None:
-            owned_llm = LlmClient(
-                settings.litellm_api_key, str(settings.litellm_router)
-            )
-            llm = owned_llm
+    async with (
+        _miniflux_client(settings, miniflux) as miniflux,
+        _llm_client(settings, llm) as llm,
+    ):
         for aggregation in config.AGGREGATIONS:
             try:
                 paths.append(
@@ -316,8 +329,3 @@ async def run_all_aggregations(
                     "aggregation %s failed: %s", aggregation.name, exc
                 )
         return paths
-    finally:
-        if owned_miniflux is not None:
-            await owned_miniflux.aclose()
-        if owned_llm is not None:
-            await owned_llm.aclose()

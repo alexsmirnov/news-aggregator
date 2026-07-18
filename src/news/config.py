@@ -7,7 +7,7 @@ class Aggregation(NamedTuple):
     focus: str
 
 
-NEWS_FOCUS = (
+NEWS_FOCUS: str = (
     "- President Trump's actions, lawsuits, and executive orders\n"
     "- Tariffs and their effects on the U.S. and world economy\n"
     "- Job market, especially related to AI technologies\n"
