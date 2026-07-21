@@ -42,7 +42,7 @@ def build_scheduler(
 
 @asynccontextmanager
 async def scheduler_lifespan(app: FastAPI) -> AsyncGenerator[None]:
-    settings = Settings()
+    settings = Settings() # type: ignore BaseSettings fill from environment
     miniflux: MinifluxClient | None = None
     llm: LlmClient | None = None
     scheduler: AsyncIOScheduler | None = None

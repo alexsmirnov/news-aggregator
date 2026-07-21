@@ -26,9 +26,3 @@ class Settings(BaseSettings):
     retry_min_wait_s: int = 2
     retry_max_wait_s: int = 30
     schedule_interval_hours: int = 12
-
-    def __init__(self, **kwargs: Any) -> None:
-        # Explicit __init__ so pyright does not require the env-sourced
-        # fields as call-site arguments (pydantic-settings populates
-        # them from the environment/.env at runtime).
-        super().__init__(**kwargs)
