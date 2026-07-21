@@ -1,8 +1,28 @@
 from pathlib import Path
-from typing import Any
+from typing import NamedTuple
 
-from pydantic import HttpUrl, SecretStr
+from pydantic import HttpUrl, SecretStr, BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Aggregation(BaseModel):
+    name: str
+    miniflux_category: str
+    focus: str
+
+
+NEWS_FOCUS: str = (
+    "- President Trump's actions, lawsuits, and executive orders\n"
+    "- Tariffs and their effects on the U.S. and world economy\n"
+    "- Job market, especially related to AI technologies\n"
+    "- War in Ukraine\n"
+    "- Midterm elections and U.S. political parties\n"
+    "- Bay Area news"
+)
+
+DEFAULT_AGGREGATIONS: list[Aggregation] = [
+    Aggregation(name="news", miniflux_category="news", focus=NEWS_FOCUS),
+]
 
 
 class Settings(BaseSettings):
@@ -13,6 +33,8 @@ class Settings(BaseSettings):
     litellm_api_key: SecretStr
     litellm_router: HttpUrl
     digest_output_dir: Path
+
+    aggregations: list[Aggregation] = DEFAULT_AGGREGATIONS
 
     fetch_lookback_hours: int = 24
     fetch_limit: int = 10000

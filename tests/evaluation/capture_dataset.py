@@ -7,7 +7,6 @@ from typing import Any, cast
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
-from news import config
 from news.digest.llm_client import LlmClient
 from news.digest.miniflux_client import MinifluxClient
 from news.digest.service import DigestService
@@ -42,7 +41,7 @@ def main() -> None:
     data = asyncio.run(
         capture(
             settings,
-            category=config.AGGREGATIONS[0].miniflux_category,
+            category=settings.aggregations[0].miniflux_category,
         )
     )
     DATA_DIR.mkdir(parents=True, exist_ok=True)

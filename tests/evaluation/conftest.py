@@ -10,7 +10,6 @@ import pytest_asyncio
 from deepeval.models import LiteLLMModel
 from pydantic import ValidationError
 
-from news import config
 from news.digest.llm_client import LlmClient
 from news.digest.miniflux_client import MinifluxClient
 from news.digest.schemas import NewsRecord, RssEntry
@@ -76,7 +75,7 @@ async def grouping_run(
     try:
         records = await service.extract_groups(
             formatted,
-            focus=config.AGGREGATIONS[0].focus,
+            focus=eval_settings.aggregations[0].focus,
         )
     finally:
         await llm.aclose()

@@ -5,8 +5,7 @@ from pathlib import Path
 import aiofiles
 from bs4 import BeautifulSoup
 
-from news import config
-from news.config import Aggregation
+from news.settings import Aggregation
 from news.digest.llm_client import LlmClient
 from news.digest.miniflux_client import MinifluxClient
 from news.digest.prompts import (
@@ -222,7 +221,7 @@ class DigestService:
     async def __call__(self) -> list[Path]:
         now = datetime.now(UTC)
         paths = []
-        for aggregation in config.AGGREGATIONS:
+        for aggregation in self.settings.aggregations:
             try:
                 paths.append(await self._run_pipeline(aggregation, now))
             except Exception as exc:

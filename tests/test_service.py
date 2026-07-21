@@ -8,7 +8,7 @@ import httpx
 import pytest
 from pydantic import HttpUrl
 
-from news.config import Aggregation
+from news.settings import Aggregation
 from news.digest.llm_client import LlmClient
 from news.digest.miniflux_client import MinifluxClient
 from news.digest.prompts import (
@@ -147,13 +147,13 @@ def news_agg() -> Aggregation:
 
 
 @pytest.fixture
-def three_aggs(monkeypatch: pytest.MonkeyPatch) -> tuple[Aggregation, ...]:
+def three_aggs(settings_stub: Settings) -> tuple[Aggregation, ...]:
     aggs = (
         Aggregation(name="a", miniflux_category="news", focus="fa"),
         Aggregation(name="b", miniflux_category="tech", focus="fb"),
         Aggregation(name="c", miniflux_category="economy", focus="fc"),
     )
-    monkeypatch.setattr("news.config.AGGREGATIONS", aggs)
+    settings_stub.aggregations = aggs  # type: ignore[attr-defined]
     return aggs
 
 
