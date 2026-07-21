@@ -22,18 +22,7 @@ from news.digest.schemas import (
     NewsResponse,
     RssEntry,
 )
-from news.digest.service import (
-    DigestService,
-    PipelineError,
-    extract_groups,
-    fetch_entries,
-    format_entries,
-    format_entry,
-    refine_all,
-    refine_record,
-    strip_html,
-    write_digest,
-)
+from news.digest.service import DigestService, PipelineError
 from news.settings import Settings
 
 NOW = datetime(2026, 7, 17, 12, 0, 0)
@@ -170,7 +159,7 @@ def three_aggs(monkeypatch: pytest.MonkeyPatch) -> tuple[Aggregation, ...]:
 
 def test_strip_html_extracts_text() -> None:
     # Act
-    text = strip_html("<p>Hello <b>World</b></p>")
+    text = DigestService.strip_html("<p>Hello <b>World</b></p>")
 
     # Assert
     assert text == "Hello World"
@@ -178,7 +167,7 @@ def test_strip_html_extracts_text() -> None:
 
 def test_format_entry_block(entry: RssEntry) -> None:
     # Act
-    text = format_entry(42, entry)
+    text = DigestService.format_entry(42, entry)
 
     # Assert
     assert text == (
@@ -206,13 +195,16 @@ def test_format_entries_joins_blocks() -> None:
     )
 
     # Act
-    text = format_entries([e1, e2])
+    text = DigestService.format_entries([e1, e2])
 
     # Assert
-    assert text == format_entry(1, e1) + "\n" + format_entry(2, e2)
+    assert text == DigestService.format_entry(
+        1, e1
+    ) + "\n" + DigestService.format_entry(2, e2)
 
 
 async def test_fetch_entries_maps_and_truncates(
+    settings_stub: Settings,
     fake_miniflux: type[FakeMiniflux],
 ) -> None:
     # Arrange
@@ -225,14 +217,15 @@ async def test_fetch_entries_maps_and_truncates(
         "feed": {"title": "Feed"},
     }
     client = fake_miniflux(entries=[raw])
+    service = DigestService(
+        settings_stub,
+        cast(MinifluxClient, client),
+        cast(LlmClient, object()),
+    )
 
     # Act
-    entries = await fetch_entries(
-        cast(MinifluxClient, client),
+    entries = await service.fetch_entries(
         category="news",
-        lookback_hours=24,
-        limit=10000,
-        max_chars=1000,
         now=NOW,
     )
 
@@ -256,6 +249,7 @@ async def test_fetch_entries_maps_and_truncates(
 
 
 async def test_extract_groups_calls_trending_then_grouping(
+    settings_stub: Settings,
     fake_llm: type[FakeLlm],
 ) -> None:
     # Arrange
@@ -263,21 +257,23 @@ async def test_extract_groups_calls_trending_then_grouping(
         records=[NewsRecord(title="T", summary="S", links=[])]
     )
     llm = fake_llm(chat_results=["TRENDS"], chat_parsed_results=[response])
+    service = DigestService(
+        settings_stub,
+        cast(MinifluxClient, object()),
+        cast(LlmClient, llm),
+    )
 
     # Act
-    records = await extract_groups(
-        cast(LlmClient, llm),
+    records = await service.extract_groups(
         "FORMATTED",
-        trending_model="sonar-reasoning-pro",
-        grouping_model="gemini-flash",
         focus="FOCUS",
     )
 
     # Assert
     assert records == response.records
-    assert llm.chat_calls[0][0] == "sonar-reasoning-pro"
+    assert llm.chat_calls[0][0] == settings_stub.model_trending
     model, messages, response_format, _ = llm.chat_parsed_calls[0]
-    assert model == "gemini-flash"
+    assert model == settings_stub.model_grouping
     assert response_format is NewsResponse
     assert "TRENDS" in messages[0]["content"]
     assert "FOCUS" in messages[0]["content"]
@@ -285,41 +281,48 @@ async def test_extract_groups_calls_trending_then_grouping(
 
 
 async def test_extract_groups_raises_on_none_trending(
+    settings_stub: Settings,
     fake_llm: type[FakeLlm],
 ) -> None:
     # Arrange
     llm = fake_llm(chat_results=[None])
+    service = DigestService(
+        settings_stub,
+        cast(MinifluxClient, object()),
+        cast(LlmClient, llm),
+    )
 
     # Act / Assert
     with pytest.raises(PipelineError):
-        await extract_groups(
-            cast(LlmClient, llm),
+        await service.extract_groups(
             "FORMATTED",
-            trending_model="sonar-reasoning-pro",
-            grouping_model="gemini-flash",
             focus="FOCUS",
         )
     assert llm.chat_parsed_calls == []
 
 
 async def test_extract_groups_raises_on_none_grouping(
+    settings_stub: Settings,
     fake_llm: type[FakeLlm],
 ) -> None:
     # Arrange
     llm = fake_llm(chat_results=["TRENDS"], chat_parsed_results=[None])
+    service = DigestService(
+        settings_stub,
+        cast(MinifluxClient, object()),
+        cast(LlmClient, llm),
+    )
 
     # Act / Assert
     with pytest.raises(PipelineError):
-        await extract_groups(
-            cast(LlmClient, llm),
+        await service.extract_groups(
             "FORMATTED",
-            trending_model="sonar-reasoning-pro",
-            grouping_model="gemini-flash",
             focus="FOCUS",
         )
 
 
 async def test_refine_record_calls_with_tools_and_thinking_budget(
+    settings_stub: Settings,
     fake_llm: type[FakeLlm],
 ) -> None:
     # Arrange
@@ -328,13 +331,15 @@ async def test_refine_record_calls_with_tools_and_thinking_budget(
         title="T", summary="S", links=cast(list[HttpUrl], links)
     )
     llm = fake_llm(chat_results=["REFINED"])
+    service = DigestService(
+        settings_stub,
+        cast(MinifluxClient, object()),
+        cast(LlmClient, llm),
+    )
 
     # Act
-    text = await refine_record(
-        cast(LlmClient, llm),
+    text = await service.refine_record(
         record,
-        model="gemini-flash",
-        max_links=20,
         today=date(2026, 7, 17),
     )
 
@@ -346,7 +351,7 @@ async def test_refine_record_calls_with_tools_and_thinking_budget(
     assert messages[1]["content"] == refinement_user_prompt(
         record.title or "",
         record.summary or "",
-        [str(link) for link in record.links[:20]],
+        [str(link) for link in record.links[: settings_stub.refine_max_links]],
     )
     assert messages[0]["content"] == refinement_system_prompt(
         date(2026, 7, 17)
@@ -354,6 +359,7 @@ async def test_refine_record_calls_with_tools_and_thinking_budget(
 
 
 async def test_refine_record_passes_links_unchanged(
+    settings_stub: Settings,
     fake_llm: type[FakeLlm],
 ) -> None:
     # Arrange
@@ -365,13 +371,15 @@ async def test_refine_record_passes_links_unchanged(
         ),
     )
     llm = fake_llm(chat_results=["REFINED"])
+    service = DigestService(
+        settings_stub,
+        cast(MinifluxClient, object()),
+        cast(LlmClient, llm),
+    )
 
     # Act
-    await refine_record(
-        cast(LlmClient, llm),
+    await service.refine_record(
         record,
-        model="gemini-flash",
-        max_links=20,
         today=date(2026, 7, 17),
     )
 
@@ -382,18 +390,21 @@ async def test_refine_record_passes_links_unchanged(
 
 
 async def test_refine_record_returns_none_on_llm_failure(
+    settings_stub: Settings,
     fake_llm: type[FakeLlm],
 ) -> None:
     # Arrange
     record = NewsRecord(title="T", summary="S", links=[])
     llm = fake_llm(chat_results=[RuntimeError("boom")])
+    service = DigestService(
+        settings_stub,
+        cast(MinifluxClient, object()),
+        cast(LlmClient, llm),
+    )
 
     # Act
-    text = await refine_record(
-        cast(LlmClient, llm),
+    text = await service.refine_record(
         record,
-        model="gemini-flash",
-        max_links=20,
         today=date(2026, 7, 17),
     )
 
@@ -402,18 +413,21 @@ async def test_refine_record_returns_none_on_llm_failure(
 
 
 async def test_refine_record_returns_none_on_none_content(
+    settings_stub: Settings,
     fake_llm: type[FakeLlm],
 ) -> None:
     # Arrange
     record = NewsRecord(title="T", summary="S", links=[])
     llm = fake_llm(chat_results=[None])
+    service = DigestService(
+        settings_stub,
+        cast(MinifluxClient, object()),
+        cast(LlmClient, llm),
+    )
 
     # Act
-    text = await refine_record(
-        cast(LlmClient, llm),
+    text = await service.refine_record(
         record,
-        model="gemini-flash",
-        max_links=20,
         today=date(2026, 7, 17),
     )
 
@@ -422,6 +436,7 @@ async def test_refine_record_returns_none_on_none_content(
 
 
 async def test_refine_all_preserves_order_and_marks_failures(
+    settings_stub: Settings,
     fake_llm: type[FakeLlm],
 ) -> None:
     # Arrange
@@ -431,13 +446,15 @@ async def test_refine_all_preserves_order_and_marks_failures(
         NewsRecord(title="T3", summary="S3", links=[]),
     ]
     llm = fake_llm(chat_results=["R1", RuntimeError("boom"), "R3"])
+    service = DigestService(
+        settings_stub,
+        cast(MinifluxClient, object()),
+        cast(LlmClient, llm),
+    )
 
     # Act
-    out = await refine_all(
-        cast(LlmClient, llm),
+    out = await service.refine_all(
         records,
-        model="gemini-flash",
-        max_links=20,
         today=date(2026, 7, 17),
     )
 
@@ -454,7 +471,7 @@ async def test_write_digest_creates_date_tree(tmp_path: Path) -> None:
     digest = Digest(generated_at="2026-07-17T12:00:00", records=[])
 
     # Act
-    path = await write_digest(
+    path = await DigestService.write_digest(
         digest, tmp_path, date(2026, 7, 17), name="news"
     )
 

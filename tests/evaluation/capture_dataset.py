@@ -3,13 +3,14 @@ import json
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from news import config
+from news.digest.llm_client import LlmClient
 from news.digest.miniflux_client import MinifluxClient
-from news.digest.service import fetch_entries
+from news.digest.service import DigestService
 from news.settings import Settings
 
 DATA_DIR = Path(__file__).parent / "data"
@@ -21,13 +22,14 @@ async def capture(
     client = MinifluxClient(
         str(settings.miniflux_api_base), settings.miniflux_api_key
     )
+    service = DigestService(
+        settings,
+        client,
+        cast(LlmClient, object()),
+    )
     try:
-        entries = await fetch_entries(
-            client,
+        entries = await service.fetch_entries(
             category=category,
-            lookback_hours=settings.fetch_lookback_hours,
-            limit=settings.fetch_limit,
-            max_chars=settings.entry_content_max_chars,
             now=now or datetime.now(UTC),
         )
     finally:

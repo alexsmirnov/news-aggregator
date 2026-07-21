@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import capture_dataset
 
@@ -32,8 +32,11 @@ async def test_capture_serializes_entries(monkeypatch) -> None:
             source="F",
         )
     ]
-    fetch_entries = AsyncMock(return_value=entries)
-    monkeypatch.setattr(capture_dataset, "fetch_entries", fetch_entries)
+    fetch_entries_mock = AsyncMock(return_value=entries)
+    service_instance = MagicMock()
+    service_instance.fetch_entries = fetch_entries_mock
+    digest_service_class = MagicMock(return_value=service_instance)
+    monkeypatch.setattr(capture_dataset, "DigestService", digest_service_class)
 
     # Act
     data = await capture_dataset.capture(settings, category="news", now=NOW)
@@ -49,11 +52,13 @@ async def test_capture_serializes_entries(monkeypatch) -> None:
             "source": "F",
         }
     ]
-    fetch_entries.assert_awaited_once()
-    assert fetch_entries.call_args.kwargs["category"] == "news"
-    assert fetch_entries.call_args.kwargs["lookback_hours"] == 24
-    assert fetch_entries.call_args.kwargs["limit"] == 10000
-    assert fetch_entries.call_args.kwargs["max_chars"] == 1000
+    digest_service_class.assert_called_once()
+    assert digest_service_class.call_args.args[0] is settings
+    fetch_entries_mock.assert_awaited_once()
+    assert fetch_entries_mock.call_args.kwargs == {
+        "category": "news",
+        "now": NOW,
+    }
 
 
 def test_main_writes_snapshot_file(monkeypatch, tmp_path) -> None:

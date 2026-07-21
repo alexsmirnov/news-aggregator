@@ -1,6 +1,7 @@
 import json
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -11,8 +12,9 @@ from pydantic import ValidationError
 
 from news import config
 from news.digest.llm_client import LlmClient
+from news.digest.miniflux_client import MinifluxClient
 from news.digest.schemas import NewsRecord, RssEntry
-from news.digest.service import extract_groups, format_entries
+from news.digest.service import DigestService
 from news.settings import Settings
 
 DATA_DIR = Path(__file__).parent / "data"
@@ -62,16 +64,18 @@ async def grouping_run(
     eval_settings: Settings,
     frozen_entries: list[RssEntry],
 ) -> tuple[str, str, list[NewsRecord]]:
-    formatted = format_entries(frozen_entries)
+    formatted = DigestService.format_entries(frozen_entries)
     llm = LlmClient(
         eval_settings.litellm_api_key, str(eval_settings.litellm_router)
     )
+    service = DigestService(
+        eval_settings,
+        cast(MinifluxClient, object()),
+        llm,
+    )
     try:
-        records = await extract_groups(
-            llm,
+        records = await service.extract_groups(
             formatted,
-            trending_model=eval_settings.model_trending,
-            grouping_model=eval_settings.model_grouping,
             focus=config.AGGREGATIONS[0].focus,
         )
     finally:

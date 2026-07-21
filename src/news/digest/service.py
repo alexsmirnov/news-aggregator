@@ -1,7 +1,6 @@
 import logging
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any
 
 import aiofiles
 from bs4 import BeautifulSoup
@@ -33,161 +32,6 @@ class PipelineError(Exception):
     pass
 
 
-def strip_html(entry_content: str) -> str:
-    return BeautifulSoup(entry_content, "html.parser").get_text(
-        " ", strip=True
-    )
-
-
-def format_entry(index: int, entry: RssEntry) -> str:
-    return (
-        f"# Entity {index}\n"
-        f"Title: {entry.title}\n"
-        f"Content: {entry.content}\n"
-        f"Source: {entry.source}\n"
-        f"Link: {entry.link}\n"
-    )
-
-
-def format_entries(entries: list[RssEntry]) -> str:
-    return "\n".join(format_entry(e.id, e) for e in entries)
-
-
-async def fetch_entries(
-    client: MinifluxClient,
-    *,
-    category: str,
-    lookback_hours: int,
-    limit: int,
-    max_chars: int,
-    now: datetime,
-) -> list[RssEntry]:
-    category_id = await client.get_category_id(category)
-    published_after = int(
-        (now - timedelta(hours=lookback_hours)).timestamp()
-    )
-    raw_entries = await client.get_entries(
-        category_id,
-        published_after=published_after,
-        order="published_at",
-        limit=limit,
-    )
-    return [
-        RssEntry(
-            id=raw["id"],
-            title=raw["title"],
-            link=raw["url"],
-            content=strip_html(raw["content"])[:max_chars],
-            published_at=raw["published_at"],
-            source=raw["feed"]["title"],
-        )
-        for raw in raw_entries
-    ]
-
-
-async def extract_groups(
-    llm: LlmClient,
-    formatted_entries: str,
-    *,
-    trending_model: str,
-    grouping_model: str,
-    focus: str,
-) -> list[NewsRecord]:
-    trending = await llm.chat(
-        trending_model, [{"role": "user", "content": trending_query()}]
-    )
-    if trending is None:
-        raise PipelineError("trending query returned no content")
-
-    parsed_response = await llm.chat_parsed(
-        grouping_model,
-        [
-            {
-                "role": "system",
-                "content": grouping_system_prompt(trending, focus),
-            },
-            {
-                "role": "user",
-                "content": grouping_user_prompt(formatted_entries),
-            },
-        ],
-        response_format=NewsResponse,
-        reasoning_effort="high",
-        temperature=1.0,
-    )
-    if parsed_response is None:
-        raise PipelineError("grouping query returned no content")
-    return parsed_response.records
-
-
-async def refine_record(
-    llm: LlmClient,
-    record: NewsRecord,
-    *,
-    model: str,
-    max_links: int,
-    today: date,
-) -> str | None:
-    links = [str(link) for link in record.links[:max_links]]
-    messages = [
-        {"role": "system", "content": refinement_system_prompt(today)},
-        {
-            "role": "user",
-            "content": refinement_user_prompt(
-                record.title or "", record.summary or "", links
-            ),
-        },
-    ]
-    try:
-        return await llm.chat(
-            model,
-            messages,
-            tools=[{"url_context": {}}],
-            extra_body={"thinkingBudget": -1},
-        )
-    except Exception:
-        logger.warning(
-            "refinement failed for %s", record.title, exc_info=True
-        )
-        return None
-
-
-async def refine_all(
-    llm: LlmClient,
-    records: list[NewsRecord],
-    *,
-    model: str,
-    max_links: int,
-    today: date,
-) -> list[DigestRecord]:
-    digest_records = []
-    for record in records:
-        refined_summary = await refine_record(
-            llm, record, model=model, max_links=max_links, today=today
-        )
-        digest_records.append(
-            DigestRecord(
-                title=record.title,
-                summary=record.summary,
-                refined_summary=refined_summary,
-                links=record.links,
-            )
-        )
-    return digest_records
-
-
-async def write_digest(
-    digest: Digest, output_dir: Path, today: date, *, name: str
-) -> Path:
-    path = (
-        output_dir / f"{today:%Y}" / f"{today:%m}" / f"{name}-{today:%d}.json"
-    )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    async with aiofiles.open(path, "w") as f:
-        await f.write(digest.model_dump_json(indent=2))
-    return path
-
-
 class DigestService:
     def __init__(
         self, settings: Settings, miniflux: MinifluxClient, llm: LlmClient
@@ -196,37 +40,179 @@ class DigestService:
         self.miniflux = miniflux
         self.llm = llm
 
+    @staticmethod
+    def strip_html(entry_content: str) -> str:
+        return BeautifulSoup(entry_content, "html.parser").get_text(
+            " ", strip=True
+        )
+
+    @staticmethod
+    def format_entry(index: int, entry: RssEntry) -> str:
+        return (
+            f"# Entity {index}\n"
+            f"Title: {entry.title}\n"
+            f"Content: {entry.content}\n"
+            f"Source: {entry.source}\n"
+            f"Link: {entry.link}\n"
+        )
+
+    @staticmethod
+    def format_entries(entries: list[RssEntry]) -> str:
+        return "\n".join(DigestService.format_entry(e.id, e) for e in entries)
+
+    async def fetch_entries(
+        self,
+        *,
+        category: str,
+        now: datetime,
+    ) -> list[RssEntry]:
+        category_id = await self.miniflux.get_category_id(category)
+        published_after = int(
+            (
+                now - timedelta(hours=self.settings.fetch_lookback_hours)
+            ).timestamp()
+        )
+        raw_entries = await self.miniflux.get_entries(
+            category_id,
+            published_after=published_after,
+            order="published_at",
+            limit=self.settings.fetch_limit,
+        )
+        return [
+            RssEntry(
+                id=raw["id"],
+                title=raw["title"],
+                link=raw["url"],
+                content=self.strip_html(raw["content"])[
+                    : self.settings.entry_content_max_chars
+                ],
+                published_at=raw["published_at"],
+                source=raw["feed"]["title"],
+            )
+            for raw in raw_entries
+        ]
+
+    async def extract_groups(
+        self,
+        formatted_entries: str,
+        *,
+        focus: str,
+    ) -> list[NewsRecord]:
+        trending = await self.llm.chat(
+            self.settings.model_trending,
+            [{"role": "user", "content": trending_query()}],
+        )
+        if trending is None:
+            raise PipelineError("trending query returned no content")
+
+        parsed_response = await self.llm.chat_parsed(
+            self.settings.model_grouping,
+            [
+                {
+                    "role": "system",
+                    "content": grouping_system_prompt(trending, focus),
+                },
+                {
+                    "role": "user",
+                    "content": grouping_user_prompt(formatted_entries),
+                },
+            ],
+            response_format=NewsResponse,
+            reasoning_effort="high",
+            temperature=1.0,
+        )
+        if parsed_response is None:
+            raise PipelineError("grouping query returned no content")
+        return parsed_response.records
+
+    async def refine_record(
+        self,
+        record: NewsRecord,
+        *,
+        today: date,
+    ) -> str | None:
+        links = [
+            str(link)
+            for link in record.links[: self.settings.refine_max_links]
+        ]
+        messages = [
+            {"role": "system", "content": refinement_system_prompt(today)},
+            {
+                "role": "user",
+                "content": refinement_user_prompt(
+                    record.title or "", record.summary or "", links
+                ),
+            },
+        ]
+        try:
+            return await self.llm.chat(
+                self.settings.model_refinement,
+                messages,
+                tools=[{"url_context": {}}],
+                extra_body={"thinkingBudget": -1},
+            )
+        except Exception:
+            logger.warning(
+                "refinement failed for %s", record.title, exc_info=True
+            )
+            return None
+
+    async def refine_all(
+        self,
+        records: list[NewsRecord],
+        *,
+        today: date,
+    ) -> list[DigestRecord]:
+        return [
+            DigestRecord(
+                title=record.title,
+                summary=record.summary,
+                refined_summary=await self.refine_record(record, today=today),
+                links=record.links,
+            )
+            for record in records
+        ]
+
+    @staticmethod
+    async def write_digest(
+        digest: Digest,
+        output_dir: Path,
+        today: date,
+        *,
+        name: str,
+    ) -> Path:
+        path = (
+            output_dir
+            / f"{today:%Y}"
+            / f"{today:%m}"
+            / f"{name}-{today:%d}.json"
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        async with aiofiles.open(path, "w") as f:
+            await f.write(digest.model_dump_json(indent=2))
+        return path
+
     async def _run_pipeline(
         self, aggregation: Aggregation, now: datetime
     ) -> Path:
         today = now.date()
-        entries = await fetch_entries(
-            self.miniflux,
+        entries = await self.fetch_entries(
             category=aggregation.miniflux_category,
-            lookback_hours=self.settings.fetch_lookback_hours,
-            limit=self.settings.fetch_limit,
-            max_chars=self.settings.entry_content_max_chars,
             now=now,
         )
-        records: list[Any] = []
+        records: list[DigestRecord] = []
         if entries:
-            formatted = format_entries(entries)
-            parsed_records = await extract_groups(
-                self.llm,
-                formatted,
-                trending_model=self.settings.model_trending,
-                grouping_model=self.settings.model_grouping,
+            formatted_entries = self.format_entries(entries)
+            news_records = await self.extract_groups(
+                formatted_entries,
                 focus=aggregation.focus,
             )
-            records = await refine_all(
-                self.llm,
-                parsed_records,
-                model=self.settings.model_refinement,
-                max_links=self.settings.refine_max_links,
+            records = await self.refine_all(
+                news_records,
                 today=today,
             )
         digest = Digest(generated_at=now.isoformat(), records=records)
-        return await write_digest(
+        return await self.write_digest(
             digest,
             self.settings.digest_output_dir,
             today,
