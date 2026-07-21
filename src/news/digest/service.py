@@ -1,14 +1,10 @@
-import ipaddress
 import logging
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import aiofiles
 from bs4 import BeautifulSoup
-from pydantic import HttpUrl
 
 from news import config
 from news.config import Aggregation
@@ -35,40 +31,6 @@ logger = logging.getLogger(__name__)
 
 class PipelineError(Exception):
     pass
-
-
-@asynccontextmanager
-async def _miniflux_client(
-    settings: Settings, provided: MinifluxClient | None
-) -> AsyncIterator[MinifluxClient]:
-    """Yield an injected client untouched, else create and close our own."""
-    if provided is not None:
-        yield provided
-        return
-    client = MinifluxClient(
-        str(settings.miniflux_api_base), settings.miniflux_api_key
-    )
-    try:
-        yield client
-    finally:
-        await client.aclose()
-
-
-@asynccontextmanager
-async def _llm_client(
-    settings: Settings, provided: LlmClient | None
-) -> AsyncIterator[LlmClient]:
-    """Yield an injected client untouched, else create and close our own."""
-    if provided is not None:
-        yield provided
-        return
-    client = LlmClient(
-        settings.litellm_api_key, str(settings.litellm_router)
-    )
-    try:
-        yield client
-    finally:
-        await client.aclose()
 
 
 def strip_html(entry_content: str) -> str:
@@ -158,33 +120,6 @@ async def extract_groups(
     return parsed_response.records
 
 
-# ponytail: static IP/scheme check only, does not resolve hostnames.
-# A DNS-rebinding domain (e.g. one that resolves to 127.0.0.1) passes
-# through as "safe" here. Closing that gap would require controlling
-# DNS resolution at request time, but the actual fetch happens inside
-# the LLM provider's remote url_context tool, not in this process, so
-# resolving here would not close the gap anyway (TOCTOU). Upgrade path
-# if this becomes a real threat: drop url_context in favor of fetching
-# links ourselves through a transport that validates the resolved IP.
-def _is_safe_link(url: HttpUrl) -> bool:
-    if url.scheme not in ("http", "https"):
-        return False
-    host = url.host
-    if host is None or host == "localhost":
-        return False
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        return True
-    return not (
-        ip.is_private
-        or ip.is_loopback
-        or ip.is_link_local
-        or ip.is_reserved
-        or ip.is_multicast
-    )
-
-
 async def refine_record(
     llm: LlmClient,
     record: NewsRecord,
@@ -193,15 +128,13 @@ async def refine_record(
     max_links: int,
     today: date,
 ) -> str | None:
-    safe_links = [
-        str(link) for link in record.links if _is_safe_link(link)
-    ][:max_links]
+    links = [str(link) for link in record.links[:max_links]]
     messages = [
         {"role": "system", "content": refinement_system_prompt(today)},
         {
             "role": "user",
             "content": refinement_user_prompt(
-                record.title or "", record.summary or "", safe_links
+                record.title or "", record.summary or "", links
             ),
         },
     ]
@@ -255,77 +188,60 @@ async def write_digest(
     return path
 
 
-async def run_pipeline(
-    settings: Settings,
-    aggregation: Aggregation,
-    miniflux: MinifluxClient | None = None,
-    llm: LlmClient | None = None,
-    *,
-    now: datetime | None = None,
-) -> Path:
-    now = now or datetime.now(UTC)
-    today = now.date()
-    async with (
-        _miniflux_client(settings, miniflux) as miniflux,
-        _llm_client(settings, llm) as llm,
-    ):
+class DigestService:
+    def __init__(
+        self, settings: Settings, miniflux: MinifluxClient, llm: LlmClient
+    ) -> None:
+        self.settings = settings
+        self.miniflux = miniflux
+        self.llm = llm
+
+    async def _run_pipeline(
+        self, aggregation: Aggregation, now: datetime
+    ) -> Path:
+        today = now.date()
         entries = await fetch_entries(
-            miniflux,
+            self.miniflux,
             category=aggregation.miniflux_category,
-            lookback_hours=settings.fetch_lookback_hours,
-            limit=settings.fetch_limit,
-            max_chars=settings.entry_content_max_chars,
+            lookback_hours=self.settings.fetch_lookback_hours,
+            limit=self.settings.fetch_limit,
+            max_chars=self.settings.entry_content_max_chars,
             now=now,
         )
         records: list[Any] = []
         if entries:
             formatted = format_entries(entries)
             parsed_records = await extract_groups(
-                llm,
+                self.llm,
                 formatted,
-                trending_model=settings.model_trending,
-                grouping_model=settings.model_grouping,
+                trending_model=self.settings.model_trending,
+                grouping_model=self.settings.model_grouping,
                 focus=aggregation.focus,
             )
             records = await refine_all(
-                llm,
+                self.llm,
                 parsed_records,
-                model=settings.model_refinement,
-                max_links=settings.refine_max_links,
+                model=self.settings.model_refinement,
+                max_links=self.settings.refine_max_links,
                 today=today,
             )
         digest = Digest(generated_at=now.isoformat(), records=records)
         return await write_digest(
-            digest, settings.digest_output_dir, today, name=aggregation.name
+            digest,
+            self.settings.digest_output_dir,
+            today,
+            name=aggregation.name,
         )
 
-
-async def run_all_aggregations(
-    settings: Settings,
-    miniflux: MinifluxClient | None = None,
-    llm: LlmClient | None = None,
-    *,
-    now: datetime | None = None,
-) -> list[Path]:
-    now = now or datetime.now(UTC)
-    paths = []
-    async with (
-        _miniflux_client(settings, miniflux) as miniflux,
-        _llm_client(settings, llm) as llm,
-    ):
+    async def __call__(self) -> list[Path]:
+        now = datetime.now(UTC)
+        paths = []
         for aggregation in config.AGGREGATIONS:
             try:
-                paths.append(
-                    await run_pipeline(
-                        settings,
-                        aggregation,
-                        miniflux=miniflux,
-                        llm=llm,
-                        now=now,
-                    )
-                )
+                paths.append(await self._run_pipeline(aggregation, now))
             except Exception as exc:
                 logger.error(
                     "aggregation %s failed: %s", aggregation.name, exc
                 )
+        logger.info("news digests written: %s", paths)
         return paths

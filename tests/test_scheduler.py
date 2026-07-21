@@ -1,19 +1,15 @@
-import logging
+import asyncio
 from datetime import timedelta
 from pathlib import Path
-from typing import cast
-from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from news.digest.llm_client import LlmClient
-from news.digest.miniflux_client import MinifluxClient
+from news.digest.service import DigestService
 from news.main import create_app
-from news.scheduler import _run_pipeline_job, scheduler_lifespan
-from news.settings import Settings
+from news.scheduler import scheduler_lifespan
 
 ENV_VARS = (
     "MINIFLUX_API_BASE",
@@ -77,6 +73,8 @@ async def test_lifespan_starts_scheduler_with_interval_job(
         assert job.trigger.interval == timedelta(hours=12)
         assert job.max_instances == 1
         assert job.coalesce is True
+        assert isinstance(job.func, DigestService)
+        assert job.args == ()
 
 
 async def test_lifespan_shutdown_stops_scheduler(set_env: None) -> None:
@@ -86,6 +84,7 @@ async def test_lifespan_shutdown_stops_scheduler(set_env: None) -> None:
     # Act
     async with scheduler_lifespan(app):
         scheduler = app.state.scheduler
+    await asyncio.sleep(0)
 
     # Assert
     assert scheduler.running is False
@@ -104,45 +103,3 @@ def test_app_boot_runs_lifespan_via_testclient(set_env: None) -> None:
         assert app.state.scheduler.running is True
 
     assert app.state.scheduler.running is False
-
-
-async def test_job_calls_run_all_aggregations_with_settings(
-    set_env: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Arrange
-    mock_run_all = AsyncMock(return_value=[Path("/tmp/x.json")])
-    monkeypatch.setattr("news.scheduler.run_all_aggregations", mock_run_all)
-    settings = Settings()
-    miniflux = cast(MinifluxClient, object())
-    llm = cast(LlmClient, object())
-
-    # Act
-    await _run_pipeline_job(settings, miniflux, llm)
-
-    # Assert
-    mock_run_all.assert_awaited_once_with(settings, miniflux, llm)
-
-
-async def test_job_swallows_and_logs_pipeline_failure(
-    set_env: None,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    # Arrange
-    monkeypatch.setattr(
-        "news.scheduler.run_all_aggregations",
-        AsyncMock(side_effect=RuntimeError("boom")),
-    )
-    settings = Settings()
-    miniflux = cast(MinifluxClient, object())
-    llm = cast(LlmClient, object())
-
-    # Act
-    with caplog.at_level(logging.ERROR, logger="news.scheduler"):
-        await _run_pipeline_job(settings, miniflux, llm)
-
-    # Assert
-    assert any(
-        "boom" in record.getMessage() or "failed" in record.getMessage()
-        for record in caplog.records
-    )

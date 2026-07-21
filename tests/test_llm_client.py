@@ -5,8 +5,9 @@ import httpx
 import openai
 import pytest
 
-from news.digest.llm_client import LlmClient
+from news.digest.llm_client import LlmClient, llm_client
 from news.digest.schemas import NewsResponse
+from news.settings import Settings
 
 
 @pytest.fixture
@@ -143,3 +144,52 @@ async def test_chat_does_not_retry_non_transient_errors(
     with pytest.raises(ValueError):
         await make_client.chat(model="m", messages=[])
     assert fake_openai.chat.completions.create.await_count == 1
+
+
+async def test_llm_client_factory_configures_and_closes_client(
+    monkeypatch: pytest.MonkeyPatch, tmp_path,
+):
+    # Arrange
+    openai_client = types.SimpleNamespace(close=AsyncMock())
+    monkeypatch.setattr(
+        "news.digest.llm_client.openai.AsyncOpenAI", lambda **_: openai_client
+    )
+    settings = Settings(
+        miniflux_api_base="http://miniflux.test",
+        miniflux_api_key="unused",
+        litellm_api_key="secret",
+        litellm_router="http://router.test",
+        digest_output_dir=tmp_path,
+    )
+
+    # Act
+    async with llm_client(settings) as client:
+        # Assert
+        assert client.client is openai_client
+
+    # Assert
+    openai_client.close.assert_awaited_once()
+
+
+async def test_llm_client_factory_closes_client_when_context_body_raises(
+    monkeypatch: pytest.MonkeyPatch, tmp_path,
+):
+    # Arrange
+    openai_client = types.SimpleNamespace(close=AsyncMock())
+    monkeypatch.setattr(
+        "news.digest.llm_client.openai.AsyncOpenAI", lambda **_: openai_client
+    )
+    settings = Settings(
+        miniflux_api_base="http://miniflux.test",
+        miniflux_api_key="unused",
+        litellm_api_key="secret",
+        litellm_router="http://router.test",
+        digest_output_dir=tmp_path,
+    )
+
+    # Act / Assert
+    with pytest.raises(RuntimeError, match="boom"):
+        async with llm_client(settings):
+            raise RuntimeError("boom")
+
+    openai_client.close.assert_awaited_once()

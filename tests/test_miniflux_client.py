@@ -1,9 +1,11 @@
 from collections.abc import Callable
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 
-from news.digest.miniflux_client import MinifluxClient
+from news.digest.miniflux_client import MinifluxClient, miniflux_client
+from news.settings import Settings
 
 
 def _sequence_handler(
@@ -182,3 +184,53 @@ async def test_http_503_status_is_retried(make_client):
     # Assert
     assert category_id == 7
     assert len(calls) == 3
+
+
+async def test_miniflux_client_factory_configures_and_closes_client(
+    monkeypatch: pytest.MonkeyPatch, tmp_path,
+):
+    # Arrange
+    http_client = type("FakeHttpClient", (), {"headers": {}, "aclose": AsyncMock()})()
+    monkeypatch.setattr(
+        "news.digest.miniflux_client.httpx.AsyncClient", lambda **_: http_client
+    )
+    settings = Settings(
+        miniflux_api_base="http://miniflux.test",
+        miniflux_api_key="secret",
+        litellm_api_key="unused",
+        litellm_router="http://router.test",
+        digest_output_dir=tmp_path,
+    )
+
+    # Act
+    async with miniflux_client(settings) as client:
+        # Assert
+        assert client.base_url == "http://miniflux.test"
+        assert http_client.headers["X-Auth-Token"] == "secret"
+
+    # Assert
+    http_client.aclose.assert_awaited_once()
+
+
+async def test_miniflux_client_factory_closes_client_when_context_body_raises(
+    monkeypatch: pytest.MonkeyPatch, tmp_path,
+):
+    # Arrange
+    http_client = type("FakeHttpClient", (), {"headers": {}, "aclose": AsyncMock()})()
+    monkeypatch.setattr(
+        "news.digest.miniflux_client.httpx.AsyncClient", lambda **_: http_client
+    )
+    settings = Settings(
+        miniflux_api_base="http://miniflux.test",
+        miniflux_api_key="secret",
+        litellm_api_key="unused",
+        litellm_router="http://router.test",
+        digest_output_dir=tmp_path,
+    )
+
+    # Act / Assert
+    with pytest.raises(RuntimeError, match="boom"):
+        async with miniflux_client(settings):
+            raise RuntimeError("boom")
+
+    http_client.aclose.assert_awaited_once()

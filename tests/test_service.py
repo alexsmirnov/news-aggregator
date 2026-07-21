@@ -3,7 +3,6 @@ import types
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
-from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -24,6 +23,7 @@ from news.digest.schemas import (
     RssEntry,
 )
 from news.digest.service import (
+    DigestService,
     PipelineError,
     extract_groups,
     fetch_entries,
@@ -31,14 +31,18 @@ from news.digest.service import (
     format_entry,
     refine_all,
     refine_record,
-    run_all_aggregations,
-    run_pipeline,
     strip_html,
     write_digest,
 )
 from news.settings import Settings
 
 NOW = datetime(2026, 7, 17, 12, 0, 0)
+
+
+class FixedDatetime(datetime):
+    @classmethod
+    def now(cls, tz: object | None = None) -> datetime:
+        return NOW
 
 
 class FakeMiniflux:
@@ -349,7 +353,7 @@ async def test_refine_record_calls_with_tools_and_thinking_budget(
     )
 
 
-async def test_refine_record_filters_unsafe_links(
+async def test_refine_record_passes_links_unchanged(
     fake_llm: type[FakeLlm],
 ) -> None:
     # Arrange
@@ -374,7 +378,7 @@ async def test_refine_record_filters_unsafe_links(
     # Assert
     _, messages, _ = llm.chat_calls[0]
     assert "public.example" in messages[1]["content"]
-    assert "127.0.0.1" not in messages[1]["content"]
+    assert "127.0.0.1" in messages[1]["content"]
 
 
 async def test_refine_record_returns_none_on_llm_failure(
@@ -494,13 +498,12 @@ async def test_run_pipeline_happy_path_writes_refined_digest(
     )
 
     # Act
-    path = await run_pipeline(
+    service = DigestService(
         settings_stub,
-        news_agg,
-        miniflux=cast(MinifluxClient, miniflux),
-        llm=cast(LlmClient, llm),
-        now=NOW,
+        cast(MinifluxClient, miniflux),
+        cast(LlmClient, llm),
     )
+    path = await service._run_pipeline(news_agg, NOW)
 
     # Assert
     expected_path = (
@@ -548,13 +551,12 @@ async def test_run_pipeline_partial_refinement_failure_still_writes(
     )
 
     # Act
-    path = await run_pipeline(
+    service = DigestService(
         settings_stub,
-        news_agg,
-        miniflux=cast(MinifluxClient, miniflux),
-        llm=cast(LlmClient, llm),
-        now=NOW,
+        cast(MinifluxClient, miniflux),
+        cast(LlmClient, llm),
     )
+    path = await service._run_pipeline(news_agg, NOW)
 
     # Assert
     data = json.loads(path.read_text())
@@ -574,13 +576,12 @@ async def test_run_pipeline_empty_window_writes_empty_digest(
     llm = fake_llm()
 
     # Act
-    path = await run_pipeline(
+    service = DigestService(
         settings_stub,
-        news_agg,
-        miniflux=cast(MinifluxClient, miniflux),
-        llm=cast(LlmClient, llm),
-        now=NOW,
+        cast(MinifluxClient, miniflux),
+        cast(LlmClient, llm),
     )
+    path = await service._run_pipeline(news_agg, NOW)
 
     # Assert
     data = json.loads(path.read_text())
@@ -600,13 +601,12 @@ async def test_run_pipeline_fetch_failure_writes_nothing(
 
     # Act / Assert
     with pytest.raises(httpx.ConnectError):
-        await run_pipeline(
+        service = DigestService(
             settings_stub,
-            news_agg,
-            miniflux=cast(MinifluxClient, miniflux),
-            llm=cast(LlmClient, llm),
-            now=NOW,
+            cast(MinifluxClient, miniflux),
+            cast(LlmClient, llm),
         )
+        await service._run_pipeline(news_agg, NOW)
     assert list(settings_stub.digest_output_dir.rglob("*.json")) == []
 
 
@@ -630,13 +630,12 @@ async def test_run_pipeline_grouping_failure_writes_nothing(
 
     # Act / Assert
     with pytest.raises(RuntimeError):
-        await run_pipeline(
+        service = DigestService(
             settings_stub,
-            news_agg,
-            miniflux=cast(MinifluxClient, miniflux),
-            llm=cast(LlmClient, llm),
-            now=NOW,
+            cast(MinifluxClient, miniflux),
+            cast(LlmClient, llm),
         )
+        await service._run_pipeline(news_agg, NOW)
     assert list(settings_stub.digest_output_dir.rglob("*.json")) == []
 
 
@@ -650,24 +649,22 @@ async def test_run_all_aggregations_runs_each_in_sequence(
     # Arrange
     miniflux = fake_miniflux()
     llm = fake_llm()
-    mock_run_pipeline = AsyncMock(
-        side_effect=[
-            Path("/p/a.json"),
-            Path("/p/b.json"),
-            Path("/p/c.json"),
-        ]
+    service = DigestService(
+        settings_stub,
+        cast(MinifluxClient, miniflux),
+        cast(LlmClient, llm),
     )
-    monkeypatch.setattr(
-        "news.digest.service.run_pipeline", mock_run_pipeline
-    )
+    calls: list[tuple[Aggregation, datetime]] = []
+
+    async def run_pipeline(aggregation: Aggregation, now: datetime) -> Path:
+        calls.append((aggregation, now))
+        return Path(f"/p/{aggregation.name}.json")
+
+    monkeypatch.setattr(service, "_run_pipeline", run_pipeline)
+    monkeypatch.setattr("news.digest.service.datetime", FixedDatetime)
 
     # Act
-    paths = await run_all_aggregations(
-        settings_stub,
-        miniflux=cast(MinifluxClient, miniflux),
-        llm=cast(LlmClient, llm),
-        now=NOW,
-    )
+    paths = await service()
 
     # Assert
     assert paths == [
@@ -675,11 +672,7 @@ async def test_run_all_aggregations_runs_each_in_sequence(
         Path("/p/b.json"),
         Path("/p/c.json"),
     ]
-    assert mock_run_pipeline.await_count == 3
-    for call, agg in zip(mock_run_pipeline.await_args_list, three_aggs):
-        args, kwargs = call
-        assert args == (settings_stub, agg)
-        assert kwargs == {"miniflux": miniflux, "llm": llm, "now": NOW}
+    assert calls == [(aggregation, NOW) for aggregation in three_aggs]
 
 
 async def test_run_all_aggregations_failed_one_does_not_block_remaining(
@@ -692,25 +685,25 @@ async def test_run_all_aggregations_failed_one_does_not_block_remaining(
     # Arrange
     miniflux = fake_miniflux()
     llm = fake_llm()
-    mock_run_pipeline = AsyncMock(
-        side_effect=[
-            Path("/p/a.json"),
-            RuntimeError("boom"),
-            Path("/p/c.json"),
-        ]
+    service = DigestService(
+        settings_stub,
+        cast(MinifluxClient, miniflux),
+        cast(LlmClient, llm),
     )
-    monkeypatch.setattr(
-        "news.digest.service.run_pipeline", mock_run_pipeline
-    )
+    calls: list[tuple[Aggregation, datetime]] = []
+
+    async def run_pipeline(aggregation: Aggregation, now: datetime) -> Path:
+        calls.append((aggregation, now))
+        if aggregation.name == "b":
+            raise RuntimeError("boom")
+        return Path(f"/p/{aggregation.name}.json")
+
+    monkeypatch.setattr(service, "_run_pipeline", run_pipeline)
+    monkeypatch.setattr("news.digest.service.datetime", FixedDatetime)
 
     # Act
-    paths = await run_all_aggregations(
-        settings_stub,
-        miniflux=cast(MinifluxClient, miniflux),
-        llm=cast(LlmClient, llm),
-        now=NOW,
-    )
+    paths = await service()
 
     # Assert
     assert paths == [Path("/p/a.json"), Path("/p/c.json")]
-    assert mock_run_pipeline.await_count == 3
+    assert calls == [(aggregation, NOW) for aggregation in three_aggs]

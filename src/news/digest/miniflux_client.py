@@ -1,3 +1,5 @@
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
@@ -9,6 +11,8 @@ from tenacity import (
     wait_exponential,
     wait_random,
 )
+
+from news.settings import Settings
 
 
 def is_transient_http_error(exc: BaseException) -> bool:
@@ -88,3 +92,14 @@ class MinifluxClient:
             return response.json()["entries"]
 
         return await self._retrying(_do)
+
+
+@asynccontextmanager
+async def miniflux_client(settings: Settings) -> AsyncGenerator[MinifluxClient]:
+    client = MinifluxClient(
+        str(settings.miniflux_api_base), settings.miniflux_api_key
+    )
+    try:
+        yield client
+    finally:
+        await client.aclose()

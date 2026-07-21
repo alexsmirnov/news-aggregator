@@ -1,3 +1,5 @@
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from typing import Any, TypeVar, cast
 
 import openai
@@ -10,6 +12,8 @@ from tenacity import (
     wait_exponential,
     wait_random,
 )
+
+from news.settings import Settings
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -84,3 +88,12 @@ class LlmClient:
             return response.choices[0].message.parsed
 
         return await self._retrying(_do)
+
+
+@asynccontextmanager
+async def llm_client(settings: Settings) -> AsyncGenerator[LlmClient]:
+    client = LlmClient(settings.litellm_api_key, str(settings.litellm_router))
+    try:
+        yield client
+    finally:
+        await client.aclose()
