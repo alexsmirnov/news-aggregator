@@ -92,7 +92,7 @@ indent-style = "space"
 
 [tool.pyright]
 include = ["src", "tests"] # Directories to analyze
-exclude = ["**/node_modules", "**/__pycache__",".*", ".venv"]
+exclude = ["**/node_modules", "**/__pycache__",".*", ".venv", "testenv"]
 extraPaths = ["src"]       # Directories to search for imports
 venvPath = "."
 venv = ".venv"

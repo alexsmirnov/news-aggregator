@@ -118,7 +118,11 @@ async def test_get_entries_resolves_category_and_returns_entries(make_client):
 
     # Act
     entries = await client.get_entries(
-        "news", published_after=1752700000, order="published_at", limit=10000
+        "news",
+        published_after=1752700000,
+        published_before=1752800000,
+        order="published_at",
+        limit=10000,
     )
 
     # Assert
@@ -126,6 +130,7 @@ async def test_get_entries_resolves_category_and_returns_entries(make_client):
     assert calls[0].url.path == "/v1/categories"
     assert calls[1].url.path == "/v1/categories/7/entries"
     assert calls[1].url.params["published_after"] == "1752700000"
+    assert calls[1].url.params["published_before"] == "1752800000"
     assert calls[1].url.params["order"] == "published_at"
     assert calls[1].url.params["limit"] == "10000"
     assert len(entries) == 1
@@ -168,6 +173,7 @@ async def test_get_entries_raises_on_invalid_entry(make_client):
         await client.get_entries(
             "news",
             published_after=1752700000,
+            published_before=1752800000,
             order="published_at",
             limit=10000,
         )
@@ -185,6 +191,7 @@ async def test_get_entries_propagates_unknown_category(make_client):
         await client.get_entries(
             "news",
             published_after=1752700000,
+            published_before=1752800000,
             order="published_at",
             limit=10000,
         )

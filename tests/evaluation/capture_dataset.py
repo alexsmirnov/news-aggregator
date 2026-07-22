@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import json
 import sys
@@ -40,16 +41,41 @@ async def capture(
     return [entry.model_dump(mode="json") for entry in entries]
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Capture RSS entries for evaluation dataset")
+    parser.add_argument(
+        "--category",
+        choices=["news", "Economy", "Technology"],
+        default="news",
+        help="RSS category to fetch (default: news)",
+    )
+    parser.add_argument(
+        "--date",
+        type=lambda s: datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=UTC),
+        default=None,
+        help="Date in YYYY-MM-DD format (default: today)",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
-    settings = Settings()
+    args = _parse_args()
+    settings = Settings()  # type: ignore
+
+    now = args.date or datetime.now(UTC)
+    category: str = args.category
+
     data = asyncio.run(
         capture(
             settings,
-            category=settings.aggregations[0].miniflux_category,
+            category=category,
+            now=now,
         )
     )
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    path = DATA_DIR / "rss_entries.json"
+    date_str = now.strftime("%Y_%m_%d")
+    filename = f"rss_entries_{date_str}_{category}.json"
+    path = DATA_DIR / filename
     path.write_text(json.dumps(data, indent=2))
     print(f"wrote {len(data)} entries to {path}")
 

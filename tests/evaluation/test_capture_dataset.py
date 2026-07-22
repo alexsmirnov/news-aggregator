@@ -1,5 +1,6 @@
 import json
-from datetime import datetime
+import sys
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import capture_dataset
@@ -78,10 +79,13 @@ def test_main_writes_snapshot_file(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(capture_dataset, "capture", capture)
     monkeypatch.setattr(capture_dataset, "DATA_DIR", tmp_path)
 
+    monkeypatch.setattr(sys, "argv", ["capture_dataset"])
+
     # Act
     capture_dataset.main()
 
     # Assert
-    snapshot = tmp_path / "rss_entries.json"
+    today_str = datetime.now(UTC).strftime("%Y_%m_%d")
+    snapshot = tmp_path / f"rss_entries_{today_str}_news.json"
     assert json.loads(snapshot.read_text()) == [{"id": 1}]
-    capture.assert_awaited_once_with(settings, category="news")
+    capture.assert_awaited_once()

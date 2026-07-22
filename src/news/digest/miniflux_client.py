@@ -69,6 +69,7 @@ class MinifluxClient:
         category_name: str,
         *,
         published_after: int,
+        published_before: int,
         order: str,
         limit: int,
     ) -> list[RssEntry]:
@@ -79,6 +80,7 @@ class MinifluxClient:
                 f"{self.base_url}/v1/categories/{category_id}/entries",
                 params={
                     "published_after": published_after,
+                    "published_before": published_before,
                     "order": order,
                     "limit": limit,
                 },

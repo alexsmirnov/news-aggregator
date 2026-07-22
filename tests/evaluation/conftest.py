@@ -2,7 +2,7 @@ import json
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -19,34 +19,56 @@ from news.settings import Settings
 
 DATA_DIR = Path(__file__).parent / "data"
 
+_ENTRY_PREFIX = "rss_entries_"
+_ENTRY_SUFFIX = ".json"
+
+
+def _collect_dataset_ids() -> list[str]:
+    """Discover dataset suffixes from rss_entries_*.json files."""
+    if not DATA_DIR.exists():
+        return []
+    ids: list[str] = []
+    pattern = f"{_ENTRY_PREFIX}*{_ENTRY_SUFFIX}"
+    for path in sorted(DATA_DIR.glob(pattern)):
+        suffix = path.name.removeprefix(
+            _ENTRY_PREFIX
+        ).removesuffix(_ENTRY_SUFFIX)
+        ids.append(suffix)
+    return ids
+
 
 @pytest.fixture(scope="module")
 def eval_settings() -> Settings:
     try:
-        return Settings()
+        return Settings()  # type: ignore
     except ValidationError:
         pytest.skip("evaluation credentials not configured")
 
 
+@pytest.fixture(scope="module", params=_collect_dataset_ids())
+def dataset_id(request: pytest.FixtureRequest) -> str:
+    return request.param
+
+
 @pytest.fixture(scope="module")
-def frozen_entries() -> list[RssEntry]:
-    path = DATA_DIR / "rss_entries.json"
+def frozen_entries(dataset_id: str) -> list[RssEntry]:
+    path = DATA_DIR / f"{_ENTRY_PREFIX}{dataset_id}{_ENTRY_SUFFIX}"
     if not path.exists():
         pytest.skip(
-            "frozen dataset missing - run "
+            f"frozen dataset missing: {path} - run "
             "tests/evaluation/capture_dataset.py"
         )
     return [RssEntry.model_validate(entry) for entry in _load_json(path)]
 
 
 @pytest.fixture(scope="module")
-def expected_groups() -> list[dict[str, object]]:
-    return _load_required_data("expected_groups.json")
+def expected_groups(dataset_id: str) -> list[dict[str, object]]:
+    return _load_required_data(f"expected_groups_{dataset_id}.json")
 
 
 @pytest.fixture(scope="module")
-def expected_summaries() -> list[dict[str, object]]:
-    return _load_required_data("expected_summaries.json")
+def expected_summaries(dataset_id: str) -> list[dict[str, object]]:
+    return _load_required_data(f"expected_summaries_{dataset_id}.json")
 
 
 @pytest.fixture(scope="module")

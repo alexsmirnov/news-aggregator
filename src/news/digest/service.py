@@ -94,9 +94,11 @@ class DigestService:
                 now - timedelta(hours=self.settings.fetch_lookback_hours)
             ).timestamp()
         )
+        published_before = int(now.timestamp())
         entries = await self.miniflux.get_entries(
             category,
             published_after=published_after,
+            published_before=published_before,
             order="published_at",
             limit=self.settings.fetch_limit,
         )

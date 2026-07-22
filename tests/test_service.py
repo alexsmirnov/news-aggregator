@@ -260,6 +260,7 @@ async def test_fetch_entries_maps_and_truncates(
             "published_after": int(
                 (NOW - timedelta(hours=24)).timestamp()
             ),
+            "published_before": int(NOW.timestamp()),
             "order": "published_at",
             "limit": 10000,
         }
