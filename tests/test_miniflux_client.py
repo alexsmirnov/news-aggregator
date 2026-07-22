@@ -2,9 +2,12 @@ from collections.abc import Callable
 from unittest.mock import AsyncMock
 
 import httpx
+import pydantic
 import pytest
+from pydantic import SecretStr
 
 from news.digest.miniflux_client import MinifluxClient, miniflux_client
+from news.digest.schemas import RssEntry
 from news.settings import Settings
 
 
@@ -46,7 +49,7 @@ def make_client() -> Callable[..., MinifluxClient]:
         client = httpx.AsyncClient(transport=transport)
         return MinifluxClient(
             base_url="http://miniflux.test",
-            api_key="secret",
+            api_key=SecretStr("secret"),
             client=client,
             max_wait=0,
             **kwargs,
@@ -88,40 +91,103 @@ async def test_get_category_id_unknown_title_raises(make_client):
         await client.get_category_id("news")
 
 
-async def test_get_entries_sends_params_and_returns_entries(make_client):
+async def test_get_entries_resolves_category_and_returns_entries(make_client):
     # Arrange
-    handler, calls = _constant_handler(
-        httpx.Response(
-            200,
-            json={
-                "total": 1,
-                "entries": [
-                    {
-                        "id": 1,
-                        "title": "T",
-                        "url": "http://x",
-                        "content": "<p>c</p>",
-                        "published_at": "2026-07-16",
-                        "feed": {"title": "F"},
-                    }
-                ],
-            },
-        )
+    handler, calls = _sequence_handler(
+        [
+            httpx.Response(200, json=[{"id": 7, "title": "news"}]),
+            httpx.Response(
+                200,
+                json={
+                    "total": 1,
+                    "entries": [
+                        {
+                            "id": 1,
+                            "title": "T",
+                            "url": "http://x",
+                            "content": "<p>c</p>",
+                            "published_at": "2026-07-16",
+                            "feed": {"title": "F"},
+                        }
+                    ],
+                },
+            ),
+        ]
     )
     client = make_client(handler)
 
     # Act
     entries = await client.get_entries(
-        7, published_after=1752700000, order="published_at", limit=10000
+        "news", published_after=1752700000, order="published_at", limit=10000
     )
 
     # Assert
-    assert calls[0].url.path == "/v1/categories/7/entries"
-    assert calls[0].url.params["published_after"] == "1752700000"
-    assert calls[0].url.params["order"] == "published_at"
-    assert calls[0].url.params["limit"] == "10000"
+    assert len(calls) == 2
+    assert calls[0].url.path == "/v1/categories"
+    assert calls[1].url.path == "/v1/categories/7/entries"
+    assert calls[1].url.params["published_after"] == "1752700000"
+    assert calls[1].url.params["order"] == "published_at"
+    assert calls[1].url.params["limit"] == "10000"
     assert len(entries) == 1
-    assert entries[0]["feed"]["title"] == "F"
+    assert isinstance(entries[0], RssEntry)
+    assert entries[0].id == 1
+    assert entries[0].title == "T"
+    assert entries[0].link == "http://x"
+    assert entries[0].content == "<p>c</p>"
+    assert entries[0].published_at == "2026-07-16"
+    assert entries[0].source == "F"
+
+
+async def test_get_entries_raises_on_invalid_entry(make_client):
+    # Arrange
+    handler, _ = _sequence_handler(
+        [
+            httpx.Response(200, json=[{"id": 7, "title": "news"}]),
+            httpx.Response(
+                200,
+                json={
+                    "total": 1,
+                    "entries": [
+                        {
+                            "id": "not-a-number",
+                            "title": "T",
+                            "url": "http://x",
+                            "content": "<p>c</p>",
+                            "published_at": "2026-07-16",
+                            "feed": {"title": "F"},
+                        }
+                    ],
+                },
+            ),
+        ]
+    )
+    client = make_client(handler)
+
+    # Act / Assert
+    with pytest.raises(pydantic.ValidationError):
+        await client.get_entries(
+            "news",
+            published_after=1752700000,
+            order="published_at",
+            limit=10000,
+        )
+
+
+async def test_get_entries_propagates_unknown_category(make_client):
+    # Arrange
+    handler, _ = _constant_handler(
+        httpx.Response(200, json=[{"id": 3, "title": "tech"}])
+    )
+    client = make_client(handler)
+
+    # Act / Assert
+    with pytest.raises(LookupError):
+        await client.get_entries(
+            "news",
+            published_after=1752700000,
+            order="published_at",
+            limit=10000,
+        )
 
 
 async def test_retries_on_transient_http_error_then_succeeds(make_client):

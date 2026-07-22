@@ -46,18 +46,42 @@ class DigestService:
         )
 
     @staticmethod
-    def format_entry(index: int, entry: RssEntry) -> str:
+    def format_entry(
+        index: int, entry: RssEntry, *, content_max_chars: int
+    ) -> str:
         return (
             f"# Entity {index}\n"
             f"Title: {entry.title}\n"
-            f"Content: {entry.content}\n"
+            f"Content: {entry.content[:content_max_chars]}\n"
             f"Source: {entry.source}\n"
             f"Link: {entry.link}\n"
         )
 
     @staticmethod
-    def format_entries(entries: list[RssEntry]) -> str:
-        return "\n".join(DigestService.format_entry(e.id, e) for e in entries)
+    def format_entries(
+        entries: list[RssEntry], *, content_max_chars: int
+    ) -> str:
+        return "\n".join(
+            DigestService.format_entry(
+                e.id, e, content_max_chars=content_max_chars
+            )
+            for e in entries
+        )
+
+    @staticmethod
+    def format_full_entry(entry: RssEntry) -> str:
+        return (
+            f"Title: {entry.title}\n"
+            f"Content: {entry.content}\n"
+            f"Link: {entry.link}\n"
+        )
+
+    @staticmethod
+    def _normalize_link(link: str) -> str:
+        # ponytail: rstrip("/") only; scheme/host normalization
+        # mismatches between RssEntry.link and pydantic-normalized
+        # HttpUrl are out of scope.
+        return link.rstrip("/")
 
     async def fetch_entries(
         self,
@@ -65,31 +89,22 @@ class DigestService:
         category: str,
         now: datetime,
     ) -> list[RssEntry]:
-        category_id = await self.miniflux.get_category_id(category)
         published_after = int(
             (
                 now - timedelta(hours=self.settings.fetch_lookback_hours)
             ).timestamp()
         )
-        raw_entries = await self.miniflux.get_entries(
-            category_id,
+        entries = await self.miniflux.get_entries(
+            category,
             published_after=published_after,
             order="published_at",
             limit=self.settings.fetch_limit,
         )
-        return [
-            RssEntry(
-                id=raw["id"],
-                title=raw["title"],
-                link=raw["url"],
-                content=self.strip_html(raw["content"])[
-                    : self.settings.entry_content_max_chars
-                ],
-                published_at=raw["published_at"],
-                source=raw["feed"]["title"],
-            )
-            for raw in raw_entries
-        ]
+        for entry in entries:
+            entry.content = self.strip_html(entry.content)[
+                : self.settings.entry_content_max_chars
+            ]
+        return entries
 
     async def extract_groups(
         self,
@@ -127,19 +142,30 @@ class DigestService:
     async def refine_record(
         self,
         record: NewsRecord,
+        entries_by_link: dict[str, RssEntry],
         *,
         today: date,
     ) -> str | None:
-        links = [
-            str(link)
-            for link in record.links[: self.settings.refine_max_links]
+        group_entries = [
+            entries_by_link[key]
+            for link in record.links
+            if (key := self._normalize_link(str(link))) in entries_by_link
         ]
+        fetch_links = [
+            entry.link
+            for entry in sorted(group_entries, key=lambda e: len(e.content))[
+                : self.settings.refine_max_links
+            ]
+        ]
+        full_content = "\n".join(
+            self.format_full_entry(entry) for entry in group_entries
+        )
         messages = [
             {"role": "system", "content": refinement_system_prompt(today)},
             {
                 "role": "user",
                 "content": refinement_user_prompt(
-                    record.title or "", record.summary or "", links
+                    record.title or "", full_content, fetch_links
                 ),
             },
         ]
@@ -159,14 +185,19 @@ class DigestService:
     async def refine_all(
         self,
         records: list[NewsRecord],
+        entries: list[RssEntry],
         *,
         today: date,
     ) -> list[DigestRecord]:
+        entries_by_link = {
+            self._normalize_link(entry.link): entry for entry in entries
+        }
         return [
             DigestRecord(
                 title=record.title,
-                summary=record.summary,
-                refined_summary=await self.refine_record(record, today=today),
+                refined_summary=await self.refine_record(
+                    record, entries_by_link, today=today
+                ),
                 links=record.links,
             )
             for record in records
@@ -201,13 +232,17 @@ class DigestService:
         )
         records: list[DigestRecord] = []
         if entries:
-            formatted_entries = self.format_entries(entries)
+            formatted_entries = self.format_entries(
+                entries,
+                content_max_chars=self.settings.grouping_content_max_chars,
+            )
             news_records = await self.extract_groups(
                 formatted_entries,
                 focus=aggregation.focus,
             )
             records = await self.refine_all(
                 news_records,
+                entries,
                 today=today,
             )
         digest = Digest(generated_at=now.isoformat(), records=records)

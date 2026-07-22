@@ -1,5 +1,6 @@
 import json
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -12,7 +13,7 @@ from pydantic import ValidationError
 
 from news.digest.llm_client import LlmClient
 from news.digest.miniflux_client import MinifluxClient
-from news.digest.schemas import NewsRecord, RssEntry
+from news.digest.schemas import DigestRecord, NewsRecord, RssEntry
 from news.digest.service import DigestService
 from news.settings import Settings
 
@@ -63,7 +64,10 @@ async def grouping_run(
     eval_settings: Settings,
     frozen_entries: list[RssEntry],
 ) -> tuple[str, str, list[NewsRecord]]:
-    formatted = DigestService.format_entries(frozen_entries)
+    formatted = DigestService.format_entries(
+        frozen_entries,
+        content_max_chars=eval_settings.grouping_content_max_chars,
+    )
     llm = LlmClient(
         eval_settings.litellm_api_key, str(eval_settings.litellm_router)
     )
@@ -83,6 +87,29 @@ async def grouping_run(
         [record.model_dump(mode="json") for record in records], indent=2
     )
     return formatted, actual_json, records
+
+
+@pytest_asyncio.fixture(scope="module")
+async def refined_run(
+    eval_settings: Settings,
+    frozen_entries: list[RssEntry],
+    grouping_run: tuple[str, str, list[NewsRecord]],
+) -> list[DigestRecord]:
+    _, _, records = grouping_run
+    llm = LlmClient(
+        eval_settings.litellm_api_key, str(eval_settings.litellm_router)
+    )
+    service = DigestService(
+        eval_settings,
+        cast(MinifluxClient, object()),
+        llm,
+    )
+    try:
+        return await service.refine_all(
+            records, frozen_entries, today=datetime.now(UTC).date()
+        )
+    finally:
+        await llm.aclose()
 
 
 def _load_json(path: Path) -> list[dict[str, object]]:

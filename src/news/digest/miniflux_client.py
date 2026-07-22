@@ -1,6 +1,5 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import Any
 
 import httpx
 from pydantic import SecretStr
@@ -12,6 +11,7 @@ from tenacity import (
     wait_random,
 )
 
+from news.digest.schemas import RssEntry
 from news.settings import Settings
 
 
@@ -26,23 +26,16 @@ class MinifluxClient:
     def __init__(
         self,
         base_url: str,
-        api_key: str | SecretStr,
-        client: httpx.AsyncClient | None = None,
+        api_key: SecretStr,
+        client: httpx.AsyncClient,
         *,
         attempts: int = 3,
         min_wait: int = 2,
         max_wait: int = 30,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        key = (
-            api_key.get_secret_value()
-            if isinstance(api_key, SecretStr)
-            else api_key
-        )
-        self.client = client or httpx.AsyncClient(
-            timeout=httpx.Timeout(30.0, connect=10.0),
-        )
-        self.client.headers["X-Auth-Token"] = key
+        self.client = client
+        self.client.headers["X-Auth-Token"] = api_key.get_secret_value()
         self._retrying = AsyncRetrying(
             stop=stop_after_attempt(attempts),
             wait=wait_exponential(
@@ -73,13 +66,15 @@ class MinifluxClient:
 
     async def get_entries(
         self,
-        category_id: int,
+        category_name: str,
         *,
         published_after: int,
         order: str,
         limit: int,
-    ) -> list[dict[str, Any]]:
-        async def _do() -> list[dict[str, Any]]:
+    ) -> list[RssEntry]:
+        category_id = await self.get_category_id(category_name)
+
+        async def _do() -> list[RssEntry]:
             response = await self.client.get(
                 f"{self.base_url}/v1/categories/{category_id}/entries",
                 params={
@@ -89,7 +84,17 @@ class MinifluxClient:
                 },
             )
             response.raise_for_status()
-            return response.json()["entries"]
+            return [
+                RssEntry(
+                    id=raw["id"],
+                    title=raw["title"],
+                    link=raw["url"],
+                    content=raw["content"],
+                    published_at=raw["published_at"],
+                    source=raw["feed"]["title"],
+                )
+                for raw in response.json()["entries"]
+            ]
 
         return await self._retrying(_do)
 
@@ -97,7 +102,9 @@ class MinifluxClient:
 @asynccontextmanager
 async def miniflux_client(settings: Settings) -> AsyncGenerator[MinifluxClient]:
     client = MinifluxClient(
-        str(settings.miniflux_api_base), settings.miniflux_api_key
+        str(settings.miniflux_api_base),
+        settings.miniflux_api_key,
+        httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)),
     )
     try:
         yield client

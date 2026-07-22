@@ -37,26 +37,21 @@ class FixedDatetime(datetime):
 class FakeMiniflux:
     def __init__(
         self,
-        entries: list[dict[str, Any]] | None = None,
-        category_id: int = 7,
+        entries: list[RssEntry] | None = None,
         category_error: Exception | None = None,
         entries_error: Exception | None = None,
     ) -> None:
         self.entries = entries if entries is not None else []
-        self.category_id = category_id
         self.category_error = category_error
         self.entries_error = entries_error
         self.calls: list[dict[str, Any]] = []
 
-    async def get_category_id(self, _title: str) -> int:
+    async def get_entries(
+        self, category_name: str, **kwargs: Any
+    ) -> list[RssEntry]:
+        self.calls.append({"category_name": category_name, **kwargs})
         if self.category_error is not None:
             raise self.category_error
-        return self.category_id
-
-    async def get_entries(
-        self, category_id: int, **kwargs: Any
-    ) -> list[dict[str, Any]]:
-        self.calls.append({"category_id": category_id, **kwargs})
         if self.entries_error is not None:
             raise self.entries_error
         return self.entries
@@ -133,7 +128,8 @@ def settings_stub(tmp_path: Path) -> Settings:
             fetch_lookback_hours=24,
             fetch_limit=10000,
             entry_content_max_chars=1000,
-            refine_max_links=20,
+            grouping_content_max_chars=300,
+            refine_max_links=10,
             model_trending="sonar-reasoning-pro",
             model_grouping="gemini-flash",
             model_refinement="gemini-flash",
@@ -167,12 +163,34 @@ def test_strip_html_extracts_text() -> None:
 
 def test_format_entry_block(entry: RssEntry) -> None:
     # Act
-    text = DigestService.format_entry(42, entry)
+    text = DigestService.format_entry(42, entry, content_max_chars=1000)
 
     # Assert
     assert text == (
         "# Entity 42\nTitle: T\nContent: C\nSource: F\nLink: http://a\n"
     )
+
+
+def test_format_entry_truncates_content_without_mutating_entry(
+    entry: RssEntry,
+) -> None:
+    # Arrange
+    entry.content = "abcdef"
+
+    # Act
+    text = DigestService.format_entry(42, entry, content_max_chars=3)
+
+    # Assert
+    assert "Content: abc\n" in text
+    assert entry.content == "abcdef"
+
+
+def test_format_full_entry_block(entry: RssEntry) -> None:
+    # Act
+    text = DigestService.format_full_entry(entry)
+
+    # Assert
+    assert text == "Title: T\nContent: C\nLink: http://a\n"
 
 
 def test_format_entries_joins_blocks() -> None:
@@ -195,12 +213,12 @@ def test_format_entries_joins_blocks() -> None:
     )
 
     # Act
-    text = DigestService.format_entries([e1, e2])
+    text = DigestService.format_entries([e1, e2], content_max_chars=1000)
 
     # Assert
     assert text == DigestService.format_entry(
-        1, e1
-    ) + "\n" + DigestService.format_entry(2, e2)
+        1, e1, content_max_chars=1000
+    ) + "\n" + DigestService.format_entry(2, e2, content_max_chars=1000)
 
 
 async def test_fetch_entries_maps_and_truncates(
@@ -208,14 +226,14 @@ async def test_fetch_entries_maps_and_truncates(
     fake_miniflux: type[FakeMiniflux],
 ) -> None:
     # Arrange
-    raw = {
-        "id": 9,
-        "title": "T",
-        "url": "http://x",
-        "content": "<p>" + "a" * 1500 + "</p>",
-        "published_at": "2026-07-16",
-        "feed": {"title": "Feed"},
-    }
+    raw = RssEntry(
+        id=9,
+        title="T",
+        link="http://x",
+        content="<p>" + "a" * 1500 + "</p>",
+        published_at="2026-07-16",
+        source="Feed",
+    )
     client = fake_miniflux(entries=[raw])
     service = DigestService(
         settings_stub,
@@ -238,7 +256,7 @@ async def test_fetch_entries_maps_and_truncates(
     assert result.content == "a" * 1000
     assert client.calls == [
         {
-            "category_id": 7,
+            "category_name": "news",
             "published_after": int(
                 (NOW - timedelta(hours=24)).timestamp()
             ),
@@ -253,9 +271,7 @@ async def test_extract_groups_calls_trending_then_grouping(
     fake_llm: type[FakeLlm],
 ) -> None:
     # Arrange
-    response = NewsResponse(
-        records=[NewsRecord(title="T", summary="S", links=[])]
-    )
+    response = NewsResponse(records=[NewsRecord(title="T", links=[])])
     llm = fake_llm(chat_results=["TRENDS"], chat_parsed_results=[response])
     service = DigestService(
         settings_stub,
@@ -321,14 +337,26 @@ async def test_extract_groups_raises_on_none_grouping(
         )
 
 
-async def test_refine_record_calls_with_tools_and_thinking_budget(
+async def test_refine_record_combines_full_content_and_limits_fetch_links(
     settings_stub: Settings,
     fake_llm: type[FakeLlm],
 ) -> None:
     # Arrange
-    links = [f"http://l{i}" for i in range(25)]
+    settings_stub.refine_max_links = 2  # type: ignore[attr-defined]
+    entries = [
+        RssEntry(
+            id=i,
+            title=f"T{i}",
+            content=content,
+            link=f"http://l{i}",
+            published_at="2026-07-16",
+            source="F",
+        )
+        for i, content in enumerate(["aaaaa", "a", "a" * 10, "aaa"])
+    ]
+    entries_by_link = {e.link: e for e in entries}
     record = NewsRecord(
-        title="T", summary="S", links=cast(list[HttpUrl], links)
+        title="T", links=cast(list[HttpUrl], [e.link for e in entries])
     )
     llm = fake_llm(chat_results=["REFINED"])
     service = DigestService(
@@ -340,6 +368,7 @@ async def test_refine_record_calls_with_tools_and_thinking_budget(
     # Act
     text = await service.refine_record(
         record,
+        entries_by_link,
         today=date(2026, 7, 17),
     )
 
@@ -348,27 +377,33 @@ async def test_refine_record_calls_with_tools_and_thinking_budget(
     _, messages, kwargs = llm.chat_calls[0]
     assert kwargs["tools"] == [{"url_context": {}}]
     assert kwargs["extra_body"] == {"thinkingBudget": -1}
+    full_content = "\n".join(
+        DigestService.format_full_entry(e) for e in entries
+    )
     assert messages[1]["content"] == refinement_user_prompt(
-        record.title or "",
-        record.summary or "",
-        [str(link) for link in record.links[: settings_stub.refine_max_links]],
+        "T", full_content, ["http://l1", "http://l3"]
     )
     assert messages[0]["content"] == refinement_system_prompt(
         date(2026, 7, 17)
     )
 
 
-async def test_refine_record_passes_links_unchanged(
+async def test_refine_record_includes_link_in_full_content_unchanged(
     settings_stub: Settings,
     fake_llm: type[FakeLlm],
 ) -> None:
     # Arrange
-    record = NewsRecord(
+    matched_entry = RssEntry(
+        id=1,
         title="T",
-        summary="S",
-        links=cast(
-            list[HttpUrl], ["http://public.example", "http://127.0.0.1"]
-        ),
+        content="C",
+        link="http://127.0.0.1",
+        published_at="2026-07-16",
+        source="F",
+    )
+    entries_by_link = {matched_entry.link: matched_entry}
+    record = NewsRecord(
+        title="T", links=cast(list[HttpUrl], [matched_entry.link])
     )
     llm = fake_llm(chat_results=["REFINED"])
     service = DigestService(
@@ -380,12 +415,12 @@ async def test_refine_record_passes_links_unchanged(
     # Act
     await service.refine_record(
         record,
+        entries_by_link,
         today=date(2026, 7, 17),
     )
 
     # Assert
     _, messages, _ = llm.chat_calls[0]
-    assert "public.example" in messages[1]["content"]
     assert "127.0.0.1" in messages[1]["content"]
 
 
@@ -394,7 +429,7 @@ async def test_refine_record_returns_none_on_llm_failure(
     fake_llm: type[FakeLlm],
 ) -> None:
     # Arrange
-    record = NewsRecord(title="T", summary="S", links=[])
+    record = NewsRecord(title="T", links=[])
     llm = fake_llm(chat_results=[RuntimeError("boom")])
     service = DigestService(
         settings_stub,
@@ -405,6 +440,7 @@ async def test_refine_record_returns_none_on_llm_failure(
     # Act
     text = await service.refine_record(
         record,
+        {},
         today=date(2026, 7, 17),
     )
 
@@ -417,7 +453,7 @@ async def test_refine_record_returns_none_on_none_content(
     fake_llm: type[FakeLlm],
 ) -> None:
     # Arrange
-    record = NewsRecord(title="T", summary="S", links=[])
+    record = NewsRecord(title="T", links=[])
     llm = fake_llm(chat_results=[None])
     service = DigestService(
         settings_stub,
@@ -428,6 +464,7 @@ async def test_refine_record_returns_none_on_none_content(
     # Act
     text = await service.refine_record(
         record,
+        {},
         today=date(2026, 7, 17),
     )
 
@@ -441,9 +478,9 @@ async def test_refine_all_preserves_order_and_marks_failures(
 ) -> None:
     # Arrange
     records = [
-        NewsRecord(title="T1", summary="S1", links=[]),
-        NewsRecord(title="T2", summary="S2", links=[]),
-        NewsRecord(title="T3", summary="S3", links=[]),
+        NewsRecord(title="T1", links=[]),
+        NewsRecord(title="T2", links=[]),
+        NewsRecord(title="T3", links=[]),
     ]
     llm = fake_llm(chat_results=["R1", RuntimeError("boom"), "R3"])
     service = DigestService(
@@ -455,6 +492,7 @@ async def test_refine_all_preserves_order_and_marks_failures(
     # Act
     out = await service.refine_all(
         records,
+        [],
         today=date(2026, 7, 17),
     )
 
@@ -490,14 +528,14 @@ async def test_run_pipeline_happy_path_writes_refined_digest(
     fake_llm: type[FakeLlm],
 ) -> None:
     # Arrange
-    raw = {
-        "id": 1,
-        "title": "T",
-        "url": "http://x",
-        "content": "C",
-        "published_at": "2026-07-16",
-        "feed": {"title": "Feed"},
-    }
+    raw = RssEntry(
+        id=1,
+        title="T",
+        link="http://x",
+        content="C",
+        published_at="2026-07-16",
+        source="Feed",
+    )
     miniflux = fake_miniflux(entries=[raw])
     llm = fake_llm(
         chat_results=["TRENDS", "REFINED"],
@@ -506,8 +544,7 @@ async def test_run_pipeline_happy_path_writes_refined_digest(
                 records=[
                     NewsRecord(
                         title="T",
-                        summary="S",
-                        links=cast(list[HttpUrl], ["http://a"]),
+                        links=cast(list[HttpUrl], ["http://x"]),
                     )
                 ]
             )
@@ -532,9 +569,8 @@ async def test_run_pipeline_happy_path_writes_refined_digest(
     assert data["records"] == [
         {
             "title": "T",
-            "summary": "S",
             "refined_summary": "REFINED",
-            "links": ["http://a/"],
+            "links": ["http://x/"],
         }
     ]
 
@@ -546,22 +582,22 @@ async def test_run_pipeline_partial_refinement_failure_still_writes(
     fake_llm: type[FakeLlm],
 ) -> None:
     # Arrange
-    raw = {
-        "id": 1,
-        "title": "T",
-        "url": "http://x",
-        "content": "C",
-        "published_at": "2026-07-16",
-        "feed": {"title": "Feed"},
-    }
+    raw = RssEntry(
+        id=1,
+        title="T",
+        link="http://x",
+        content="C",
+        published_at="2026-07-16",
+        source="Feed",
+    )
     miniflux = fake_miniflux(entries=[raw])
     llm = fake_llm(
         chat_results=["TRENDS", "R1", RuntimeError("boom")],
         chat_parsed_results=[
             NewsResponse(
                 records=[
-                    NewsRecord(title="T1", summary="S1", links=[]),
-                    NewsRecord(title="T2", summary="S2", links=[]),
+                    NewsRecord(title="T1", links=[]),
+                    NewsRecord(title="T2", links=[]),
                 ]
             )
         ],
@@ -634,14 +670,14 @@ async def test_run_pipeline_grouping_failure_writes_nothing(
     fake_llm: type[FakeLlm],
 ) -> None:
     # Arrange
-    raw = {
-        "id": 1,
-        "title": "T",
-        "url": "http://x",
-        "content": "C",
-        "published_at": "2026-07-16",
-        "feed": {"title": "Feed"},
-    }
+    raw = RssEntry(
+        id=1,
+        title="T",
+        link="http://x",
+        content="C",
+        published_at="2026-07-16",
+        source="Feed",
+    )
     miniflux = fake_miniflux(entries=[raw])
     llm = fake_llm(chat_results=[RuntimeError("boom")])
 

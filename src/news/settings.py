@@ -38,8 +38,9 @@ class Settings(BaseSettings):
 
     fetch_lookback_hours: int = 24
     fetch_limit: int = 10000
-    entry_content_max_chars: int = 1000
-    refine_max_links: int = 20
+    entry_content_max_chars: int = 20000
+    grouping_content_max_chars: int = 300
+    refine_max_links: int = 10
     model_trending: str = "sonar-reasoning-pro"
     model_grouping: str = "gemini-flash"
     model_refinement: str = "gemini-flash"

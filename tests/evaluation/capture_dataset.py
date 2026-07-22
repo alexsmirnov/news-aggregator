@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
+import httpx
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from news.digest.llm_client import LlmClient
@@ -19,7 +21,9 @@ async def capture(
     settings: Settings, *, category: str, now: datetime | None = None
 ) -> list[dict[str, Any]]:
     client = MinifluxClient(
-        str(settings.miniflux_api_base), settings.miniflux_api_key
+        str(settings.miniflux_api_base),
+        settings.miniflux_api_key,
+        httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)),
     )
     service = DigestService(
         settings,

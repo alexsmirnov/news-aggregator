@@ -8,7 +8,7 @@ from deepeval.models import LiteLLMModel
 from deepeval.test_case import LLMTestCase, SingleTurnParams
 from metrics import match_groups, pairwise_prf, rouge_l
 
-from news.digest.schemas import NewsRecord
+from news.digest.schemas import DigestRecord, NewsRecord
 
 GROUPING_F1_MIN = 0.6
 ROUGE_L_MIN = 0.3
@@ -75,18 +75,19 @@ def test_grouping_judge(
 @pytest.mark.integration
 def test_summary_rouge_l(
     grouping_run: tuple[str, str, list[NewsRecord]],
+    refined_run: list[DigestRecord],
     expected_groups: list[dict[str, object]],
     expected_summaries: list[dict[str, object]],
 ) -> None:
     # Arrange
     _, _, records = grouping_run
     matched = _matched_summaries(
-        records, expected_groups, expected_summaries
+        records, refined_run, expected_groups, expected_summaries
     )
 
     # Act
     scores = [
-        rouge_l(expected_summary, record.summary or "")
+        rouge_l(expected_summary, record.refined_summary or "")
         for record, expected_summary in matched
     ]
 
@@ -99,6 +100,7 @@ def test_summary_rouge_l(
 @pytest.mark.integration
 async def test_summary_judge_mean(
     grouping_run: tuple[str, str, list[NewsRecord]],
+    refined_run: list[DigestRecord],
     expected_groups: list[dict[str, object]],
     expected_summaries: list[dict[str, object]],
     judge: LiteLLMModel,
@@ -106,7 +108,7 @@ async def test_summary_judge_mean(
     # Arrange
     _, _, records = grouping_run
     matched = _matched_summaries(
-        records, expected_groups, expected_summaries
+        records, refined_run, expected_groups, expected_summaries
     )
     assert matched, "no matched groups had expected summaries"
 
@@ -117,7 +119,7 @@ async def test_summary_judge_mean(
         await metric.a_measure(
             LLMTestCase(
                 input=record.title or "",
-                actual_output=record.summary or "",
+                actual_output=record.refined_summary or "",
                 expected_output=expected_summary,
             )
         )
@@ -141,9 +143,10 @@ def _links(group: dict[str, object]) -> set[str]:
 
 def _matched_summaries(
     records: list[NewsRecord],
+    refined_records: list[DigestRecord],
     expected_groups: list[dict[str, object]],
     expected_summaries: list[dict[str, object]],
-) -> list[tuple[NewsRecord, str]]:
+) -> list[tuple[DigestRecord, str]]:
     pairs = match_groups(
         [{str(link) for link in record.links} for record in records],
         [_links(group) for group in expected_groups],
@@ -162,7 +165,7 @@ def _matched_summaries(
         if not isinstance(summary, str):
             logger.warning("missing expected summary for %s", title)
             continue
-        matched.append((records[predicted_index], summary))
+        matched.append((refined_records[predicted_index], summary))
     return matched
 
 

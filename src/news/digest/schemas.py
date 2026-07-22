@@ -12,7 +12,6 @@ class RssEntry(BaseModel):
 
 class NewsRecord(BaseModel):
     title: str | None
-    summary: str | None
     links: list[HttpUrl]
 
 
@@ -22,7 +21,6 @@ class NewsResponse(BaseModel):
 
 class DigestRecord(BaseModel):
     title: str | None
-    summary: str | None
     refined_summary: str | None
     links: list[HttpUrl]
 
