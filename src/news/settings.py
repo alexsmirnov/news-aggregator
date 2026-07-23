@@ -42,9 +42,9 @@ class Settings(BaseSettings):
     grouping_content_max_chars: int = 300
     refine_max_links: int = 10
     model_trending: str = "sonar-reasoning-pro"
-    model_grouping: str = "gpt-terra"
+    model_grouping: str = "gpt-5-terra"
     model_refinement: str = "gemini-flash"
-    eval_judge_model: str = "gpt-luna"
+    eval_judge_model: str = "gpt-5-luna"
     retry_attempts: int = 3
     retry_min_wait_s: int = 2
     retry_max_wait_s: int = 30

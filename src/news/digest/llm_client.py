@@ -1,3 +1,4 @@
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any, TypeVar, cast
@@ -16,6 +17,8 @@ from tenacity import (
 from news.settings import Settings
 
 T = TypeVar("T", bound=BaseModel)
+
+logger = logging.getLogger(__name__)
 
 
 class LlmClient:
@@ -60,11 +63,27 @@ class LlmClient:
         self, model: str, messages: list[dict[str, Any]], **kwargs: Any
     ) -> str | None:
         sdk_messages = cast(list[ChatCompletionMessageParam], messages)
+        attempt = 0
 
         async def _do() -> str | None:
-            response = await self.client.chat.completions.create(
-                model=model, messages=sdk_messages, **kwargs
-            )
+            nonlocal attempt
+            attempt += 1
+            if attempt > 1:
+                logger.warning(
+                    "llm chat retry attempt=%s model=%s", attempt, model
+                )
+            try:
+                response = await self.client.chat.completions.create(
+                    model=model, messages=sdk_messages, **kwargs
+                )
+            except Exception:
+                logger.error(
+                    "llm chat failed attempt=%s model=%s",
+                    attempt,
+                    model,
+                    exc_info=True,
+                )
+                raise
             return response.choices[0].message.content
 
         return await self._retrying(_do)
@@ -77,14 +96,34 @@ class LlmClient:
         **kwargs: Any,
     ) -> T | None:
         sdk_messages = cast(list[ChatCompletionMessageParam], messages)
+        attempt = 0
 
         async def _do() -> T | None:
-            response = await self.client.chat.completions.parse(
-                model=model,
-                messages=sdk_messages,
-                response_format=response_format,
-                **kwargs,
-            )
+            nonlocal attempt
+            attempt += 1
+            if attempt > 1:
+                logger.warning(
+                    "llm parsed retry attempt=%s model=%s response_format=%s",
+                    attempt,
+                    model,
+                    response_format.__name__,
+                )
+            try:
+                response = await self.client.chat.completions.parse(
+                    model=model,
+                    messages=sdk_messages,
+                    response_format=response_format,
+                    **kwargs,
+                )
+            except Exception:
+                logger.error(
+                    "llm parsed failed attempt=%s model=%s response_format=%s",
+                    attempt,
+                    model,
+                    response_format.__name__,
+                    exc_info=True,
+                )
+                raise
             return response.choices[0].message.parsed
 
         return await self._retrying(_do)

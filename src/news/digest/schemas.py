@@ -1,4 +1,4 @@
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel
 
 
 class RssEntry(BaseModel):
@@ -12,7 +12,7 @@ class RssEntry(BaseModel):
 
 class NewsRecord(BaseModel):
     title: str | None
-    links: list[HttpUrl]
+    links: list[str]
 
 
 class NewsResponse(BaseModel):
@@ -22,7 +22,7 @@ class NewsResponse(BaseModel):
 class DigestRecord(BaseModel):
     title: str | None
     refined_summary: str | None
-    links: list[HttpUrl]
+    links: list[str]
 
 
 class Digest(BaseModel):

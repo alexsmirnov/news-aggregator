@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -5,7 +6,6 @@ from pathlib import Path
 import aiofiles
 from bs4 import BeautifulSoup
 
-from news.settings import Aggregation
 from news.digest.llm_client import LlmClient
 from news.digest.miniflux_client import MinifluxClient
 from news.digest.prompts import (
@@ -22,9 +22,11 @@ from news.digest.schemas import (
     NewsResponse,
     RssEntry,
 )
-from news.settings import Settings
+from news.settings import Aggregation, Settings
 
 logger = logging.getLogger(__name__)
+
+MAX_CONCURRENT_REFINEMENTS = 8
 
 
 class PipelineError(Exception):
@@ -95,6 +97,14 @@ class DigestService:
             ).timestamp()
         )
         published_before = int(now.timestamp())
+        logger.info(
+            "fetching entries category=%s published_after=%s "
+            "published_before=%s limit=%s",
+            category,
+            published_after,
+            published_before,
+            self.settings.fetch_limit,
+        )
         entries = await self.miniflux.get_entries(
             category,
             published_after=published_after,
@@ -106,6 +116,13 @@ class DigestService:
             entry.content = self.strip_html(entry.content)[
                 : self.settings.entry_content_max_chars
             ]
+        if not entries:
+            logger.warning("no entries fetched category=%s", category)
+        logger.info(
+            "fetched entries category=%s entries_count=%s",
+            category,
+            len(entries),
+        )
         return entries
 
     async def extract_groups(
@@ -114,11 +131,17 @@ class DigestService:
         *,
         focus: str,
     ) -> list[NewsRecord]:
+        logger.info(
+            "extracting groups formatted_entries_chars=%s focus_chars=%s",
+            len(formatted_entries),
+            len(focus),
+        )
         trending = await self.llm.chat(
             self.settings.model_trending,
             [{"role": "user", "content": trending_query()}],
         )
         if trending is None:
+            logger.warning("trending query returned empty content")
             raise PipelineError("trending query returned no content")
 
         parsed_response = await self.llm.chat_parsed(
@@ -138,7 +161,15 @@ class DigestService:
             temperature=1.0,
         )
         if parsed_response is None:
+            logger.warning("grouping query returned empty content")
             raise PipelineError("grouping query returned no content")
+        if not parsed_response.records:
+            logger.warning("grouping produced empty records")
+        logger.info(
+            "extracted groups records_count=%s trending_chars=%s",
+            len(parsed_response.records),
+            len(trending),
+        )
         return parsed_response.records
 
     async def refine_record(
@@ -153,6 +184,20 @@ class DigestService:
             for link in record.links
             if (key := self._normalize_link(str(link))) in entries_by_link
         ]
+        unmatched_links = [
+            str(link)
+            for link in record.links
+            if self._normalize_link(str(link)) not in entries_by_link
+        ]
+        if unmatched_links:
+            logger.warning(
+                "refine record has unmatched links title=%s links_count=%s "
+                "matched_count=%s unmatched_links=%s",
+                record.title,
+                len(record.links),
+                len(group_entries),
+                unmatched_links,
+            )
         fetch_links = [
             entry.link
             for entry in sorted(group_entries, key=lambda e: len(e.content))[
@@ -161,6 +206,16 @@ class DigestService:
         ]
         full_content = "\n".join(
             self.format_full_entry(entry) for entry in group_entries
+        )
+        logger.info(
+            "refining record title=%s links_count=%s "
+            "matched_entries_count=%s fetch_links_count=%s "
+            "full_content_chars=%s",
+            record.title,
+            len(record.links),
+            len(group_entries),
+            len(fetch_links),
+            len(full_content),
         )
         messages = [
             {"role": "system", "content": refinement_system_prompt(today)},
@@ -172,17 +227,47 @@ class DigestService:
             },
         ]
         try:
-            return await self.llm.chat(
+            refined_summary = await self.llm.chat(
                 self.settings.model_refinement,
                 messages,
                 tools=[{"url_context": {}}],
                 extra_body={"thinkingBudget": -1},
             )
         except Exception:
-            logger.warning(
-                "refinement failed for %s", record.title, exc_info=True
+            logger.error(
+                "refinement failed title=%s", record.title, exc_info=True
             )
             return None
+
+        if refined_summary is None:
+            logger.warning(
+                "refinement returned empty summary title=%s", record.title
+            )
+        else:
+            logger.info(
+                "refinement completed title=%s summary_chars=%s",
+                record.title,
+                len(refined_summary),
+            )
+        return refined_summary
+
+    async def _refine_with_limit(
+        self,
+        record: NewsRecord,
+        entries_by_link: dict[str, RssEntry],
+        semaphore: asyncio.Semaphore,
+        *,
+        today: date,
+    ) -> DigestRecord:
+        async with semaphore:
+            refined_summary = await self.refine_record(
+                record, entries_by_link, today=today
+            )
+        return DigestRecord(
+            title=record.title,
+            refined_summary=refined_summary,
+            links=record.links,
+        )
 
     async def refine_all(
         self,
@@ -194,16 +279,28 @@ class DigestService:
         entries_by_link = {
             self._normalize_link(entry.link): entry for entry in entries
         }
-        return [
-            DigestRecord(
-                title=record.title,
-                refined_summary=await self.refine_record(
-                    record, entries_by_link, today=today
-                ),
-                links=record.links,
+        logger.info(
+            "refining all records_count=%s entries_count=%s",
+            len(records),
+            len(entries),
+        )
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_REFINEMENTS)
+        digest_records = await asyncio.gather(
+            *(
+                self._refine_with_limit(
+                    record,
+                    entries_by_link,
+                    semaphore,
+                    today=today,
+                )
+                for record in records
             )
-            for record in records
-        ]
+        )
+        logger.info(
+            "refine all completed digest_records_count=%s",
+            len(digest_records),
+        )
+        return digest_records
 
     @staticmethod
     async def write_digest(
@@ -219,15 +316,30 @@ class DigestService:
             / f"{today:%m}"
             / f"{name}-{today:%d}.json"
         )
-        path.parent.mkdir(parents=True, exist_ok=True)
-        async with aiofiles.open(path, "w") as f:
-            await f.write(digest.model_dump_json(indent=2))
+        logger.info(
+            "writing digest path=%s records_count=%s",
+            path,
+            len(digest.records),
+        )
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            async with aiofiles.open(path, "w") as f:
+                await f.write(digest.model_dump_json(indent=2))
+        except Exception:
+            logger.error("failed writing digest path=%s", path, exc_info=True)
+            raise
+        logger.info("digest written path=%s", path)
         return path
 
     async def _run_pipeline(
         self, aggregation: Aggregation, now: datetime
     ) -> Path:
         today = now.date()
+        logger.info(
+            "starting digest pipeline aggregation=%s category=%s",
+            aggregation.name,
+            aggregation.miniflux_category,
+        )
         entries = await self.fetch_entries(
             category=aggregation.miniflux_category,
             now=now,
@@ -238,6 +350,11 @@ class DigestService:
                 entries,
                 content_max_chars=self.settings.grouping_content_max_chars,
             )
+            logger.info(
+                "formatted entries aggregation=%s formatted_entries_chars=%s",
+                aggregation.name,
+                len(formatted_entries),
+            )
             news_records = await self.extract_groups(
                 formatted_entries,
                 focus=aggregation.focus,
@@ -247,7 +364,16 @@ class DigestService:
                 entries,
                 today=today,
             )
+        else:
+            logger.warning(
+                "no entries to process aggregation=%s", aggregation.name
+            )
         digest = Digest(generated_at=now.isoformat(), records=records)
+        logger.info(
+            "digest constructed aggregation=%s digest_records_count=%s",
+            aggregation.name,
+            len(records),
+        )
         return await self.write_digest(
             digest,
             self.settings.digest_output_dir,
@@ -257,6 +383,10 @@ class DigestService:
 
     async def __call__(self) -> list[Path]:
         now = datetime.now(UTC)
+        logger.info(
+            "starting digest service aggregations_count=%s",
+            len(self.settings.aggregations)
+        )
         paths = []
         for aggregation in self.settings.aggregations:
             try:
@@ -265,5 +395,7 @@ class DigestService:
                 logger.error(
                     "aggregation %s failed: %s", aggregation.name, exc
                 )
-        logger.info("news digests written: %s", paths)
+        logger.info(
+            "news digests written count=%s paths=%s", len(paths), paths
+        )
         return paths
