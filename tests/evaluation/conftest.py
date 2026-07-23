@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import pytest
 import pytest_asyncio
-from deepeval.models import LiteLLMModel
+from deepeval.models import GPTModel
 from pydantic import ValidationError
 
 from news.digest.llm_client import LlmClient
@@ -72,12 +72,12 @@ def expected_summaries(dataset_id: str) -> list[dict[str, object]]:
 
 
 @pytest.fixture(scope="module")
-def judge(eval_settings: Settings) -> LiteLLMModel:
-    return LiteLLMModel(
+def judge(eval_settings: Settings) -> GPTModel:
+    return GPTModel(
         model=eval_settings.eval_judge_model,
         api_key=eval_settings.litellm_api_key.get_secret_value(),
         base_url=str(eval_settings.litellm_router),
-        temperature=0,
+        temperature=1,
     )
 
 

@@ -4,7 +4,7 @@ import logging
 import pytest
 from deepeval import assert_test
 from deepeval.metrics import GEval
-from deepeval.models import LiteLLMModel
+from deepeval.models import GPTModel
 from deepeval.test_case import LLMTestCase, SingleTurnParams
 from metrics import match_groups, pairwise_prf, rouge_l
 
@@ -41,7 +41,7 @@ def test_grouping_pairwise_f1(
 def test_grouping_judge(
     grouping_run: tuple[str, str, list[NewsRecord]],
     expected_groups: list[dict[str, object]],
-    judge: LiteLLMModel,
+    judge: GPTModel,
 ) -> None:
     # Arrange
     formatted, actual_json, _ = grouping_run
@@ -103,7 +103,7 @@ async def test_summary_judge_mean(
     refined_run: list[DigestRecord],
     expected_groups: list[dict[str, object]],
     expected_summaries: list[dict[str, object]],
-    judge: LiteLLMModel,
+    judge: GPTModel,
 ) -> None:
     # Arrange
     _, _, records = grouping_run
@@ -169,7 +169,7 @@ def _matched_summaries(
     return matched
 
 
-def _summary_metric(judge: LiteLLMModel) -> GEval:
+def _summary_metric(judge: GPTModel) -> GEval:
     return GEval(
         name="Summary faithfulness",
         criteria=(
