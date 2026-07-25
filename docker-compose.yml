@@ -20,14 +20,14 @@ services:
     # healthcheck:
     #  test: ["CMD", "/usr/bin/miniflux", "-healthcheck", "auto"]
   db:
-    image: postgres:latest
+    image: postgres:18
     container_name: postgres
     environment:
       - POSTGRES_USER=miniflux
       - POSTGRES_PASSWORD=secret
       - POSTGRES_DB=miniflux
     volumes:
-      - miniflux-db:/var/lib/postgresql/data
+      - miniflux-db:/var/lib/postgresql
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "miniflux"]
       interval: 10s
