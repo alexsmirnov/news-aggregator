@@ -8,8 +8,8 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from news.digest.service import DigestService
-from news.main import create_app
 from news.scheduler import scheduler_lifespan
+from news.server import create_app
 
 ENV_VARS = (
     "MINIFLUX_API_BASE",

@@ -136,20 +136,13 @@ class DigestService:
             len(formatted_entries),
             len(focus),
         )
-        trending = await self.llm.chat(
-            self.settings.model_trending,
-            [{"role": "user", "content": trending_query()}],
-        )
-        if trending is None:
-            logger.warning("trending query returned empty content")
-            raise PipelineError("trending query returned no content")
 
         parsed_response = await self.llm.chat_parsed(
             self.settings.model_grouping,
             [
                 {
                     "role": "system",
-                    "content": grouping_system_prompt(trending, focus),
+                    "content": grouping_system_prompt(focus),
                 },
                 {
                     "role": "user",

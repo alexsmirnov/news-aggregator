@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class RssEntry(BaseModel):
@@ -11,12 +11,12 @@ class RssEntry(BaseModel):
 
 
 class NewsRecord(BaseModel):
-    title: str | None
-    links: list[str]
+    title: str | None = Field(description="combined news headline")
+    links: list[str] = Field(description="source pages for the news item")
 
 
 class NewsResponse(BaseModel):
-    records: list[NewsRecord]
+    records: list[NewsRecord] = Field(description="most popular breaking news")
 
 
 class DigestRecord(BaseModel):

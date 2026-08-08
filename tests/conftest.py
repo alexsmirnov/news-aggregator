@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from news.main import app
+from news.server import app
 
 
 @pytest.fixture

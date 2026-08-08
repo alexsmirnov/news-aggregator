@@ -1,6 +1,10 @@
 import re
+from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
+
+import news.server
 
 
 def body_text(html: str) -> str:
@@ -14,6 +18,46 @@ def title_text(html: str) -> str:
     title = re.search(r"<title>(.*?)</title>", html, re.DOTALL)
     assert title is not None
     return title.group(1).strip()
+
+
+@pytest.fixture
+def set_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("MINIFLUX_API_BASE", "http://m.test")
+    monkeypatch.setenv("MINIFLUX_API_KEY", "k")
+    monkeypatch.setenv("LITELLM_API_KEY", "l")
+    monkeypatch.setenv("LITELLM_ROUTER", "http://r.test")
+    monkeypatch.setenv("DIGEST_OUTPUT_DIR", str(tmp_path))
+
+
+async def test_run_aggregate_builds_service_from_settings_and_calls_it(
+    set_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Arrange
+    constructed: dict[str, object] = {}
+
+    class FakeDigestService:
+        def __init__(
+            self, settings: object, miniflux: object, llm: object
+        ) -> None:
+            constructed["settings"] = settings
+            constructed["miniflux"] = miniflux
+            constructed["llm"] = llm
+            constructed["called"] = False
+
+        async def __call__(self) -> list[object]:
+            constructed["called"] = True
+            return []
+
+    monkeypatch.setattr(news.server, "DigestService", FakeDigestService)
+
+    # Act
+    await news.server.run_aggregate()
+
+    # Assert
+    assert constructed["settings"] is not None
+    assert constructed["miniflux"] is not None
+    assert constructed["llm"] is not None
+    assert constructed["called"] is True
 
 
 def test_home_page_returns_ok_html_without_redirect(

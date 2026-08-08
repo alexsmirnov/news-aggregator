@@ -21,10 +21,9 @@ def test_trending_query_text():
 
 def test_grouping_system_prompt_embeds_trending_focus_and_uses_fixed_spelling():  # noqa: E501
     # Act
-    text = grouping_system_prompt("TRENDING_EXAMPLES", "FOCUS_TEXT")
+    text = grouping_system_prompt( "FOCUS_TEXT")
 
     # Assert
-    assert "TRENDING_EXAMPLES" in text
     assert "Pay special attention to:\nFOCUS_TEXT" in text
     assert "happend" not in text
     assert "<news>" not in text
