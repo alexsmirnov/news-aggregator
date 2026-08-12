@@ -122,7 +122,7 @@ async def test_get_entries_resolves_category_and_returns_entries(make_client):
         published_after=1752700000,
         published_before=1752800000,
         order="published_at",
-        limit=10000,
+        limit=5,
     )
 
     # Assert
@@ -132,7 +132,8 @@ async def test_get_entries_resolves_category_and_returns_entries(make_client):
     assert calls[1].url.params["published_after"] == "1752700000"
     assert calls[1].url.params["published_before"] == "1752800000"
     assert calls[1].url.params["order"] == "published_at"
-    assert calls[1].url.params["limit"] == "10000"
+    assert calls[1].url.params["limit"] == "5"
+    assert calls[1].url.params["offset"] == "0"
     assert len(entries) == 1
     assert isinstance(entries[0], RssEntry)
     assert entries[0].id == 1
@@ -141,6 +142,83 @@ async def test_get_entries_resolves_category_and_returns_entries(make_client):
     assert entries[0].content == "<p>c</p>"
     assert entries[0].published_at == "2026-07-16"
     assert entries[0].source == "F"
+
+
+def _entry_json(entry_id: int) -> dict:
+    return {
+        "id": entry_id,
+        "title": "T",
+        "url": "http://x",
+        "content": "<p>c</p>",
+        "published_at": "2026-07-16",
+        "feed": {"title": "F"},
+    }
+
+
+async def test_get_entries_paginates_across_full_pages(make_client):
+    # Arrange: max_page_limit=2, requested limit=4 -> two full pages of 2
+    handler, calls = _sequence_handler(
+        [
+            httpx.Response(200, json=[{"id": 7, "title": "news"}]),
+            httpx.Response(
+                200,
+                json={"total": 4, "entries": [_entry_json(1), _entry_json(2)]},
+            ),
+            httpx.Response(
+                200,
+                json={"total": 4, "entries": [_entry_json(3), _entry_json(4)]},
+            ),
+        ]
+    )
+    client = make_client(handler, max_page_limit=2)
+
+    # Act
+    entries = await client.get_entries(
+        "news",
+        published_after=1752700000,
+        published_before=1752800000,
+        order="published_at",
+        limit=4,
+    )
+
+    # Assert
+    assert len(calls) == 3
+    assert calls[1].url.params["limit"] == "2"
+    assert calls[1].url.params["offset"] == "0"
+    assert calls[2].url.params["limit"] == "2"
+    assert calls[2].url.params["offset"] == "2"
+    assert [e.id for e in entries] == [1, 2, 3, 4]
+
+
+async def test_get_entries_stops_when_page_shorter_than_requested(make_client):
+    # Arrange: max_page_limit=2, limit=10, server exhausted after 3 entries
+    handler, calls = _sequence_handler(
+        [
+            httpx.Response(200, json=[{"id": 7, "title": "news"}]),
+            httpx.Response(
+                200,
+                json={"total": 3, "entries": [_entry_json(1), _entry_json(2)]},
+            ),
+            httpx.Response(
+                200,
+                json={"total": 3, "entries": [_entry_json(3)]},
+            ),
+        ]
+    )
+    client = make_client(handler, max_page_limit=2)
+
+    # Act
+    entries = await client.get_entries(
+        "news",
+        published_after=1752700000,
+        published_before=1752800000,
+        order="published_at",
+        limit=10,
+    )
+
+    # Assert: loop stops after short page, no third entries request made
+    assert len(calls) == 3
+    assert [e.id for e in entries] == [1, 2, 3]
 
 
 async def test_get_entries_raises_on_invalid_entry(make_client):

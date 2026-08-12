@@ -35,9 +35,11 @@ class MinifluxClient:
         attempts: int = 3,
         min_wait: int = 2,
         max_wait: int = 30,
+        max_page_limit: int = 1000,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.client = client
+        self.max_page_limit = max_page_limit
         self.client.headers["X-Auth-Token"] = api_key.get_secret_value()
         self._retrying = AsyncRetrying(
             stop=stop_after_attempt(attempts),
@@ -103,6 +105,43 @@ class MinifluxClient:
         limit: int,
     ) -> list[RssEntry]:
         category_id = await self.get_category_id(category_name)
+        entries: list[RssEntry] = []
+        offset = 0
+        while len(entries) < limit:
+            page_limit = min(self.max_page_limit, limit - len(entries))
+            page = await self._get_entries_page(
+                category_name,
+                category_id,
+                published_after=published_after,
+                published_before=published_before,
+                order=order,
+                limit=page_limit,
+                offset=offset,
+            )
+            entries.extend(page)
+            if len(page) < page_limit:
+                break
+            offset += page_limit
+
+        if not entries:
+            logger.warning(
+                "miniflux returned empty entries category=%s category_id=%s",
+                category_name,
+                category_id,
+            )
+        return entries
+
+    async def _get_entries_page(
+        self,
+        category_name: str,
+        category_id: int,
+        *,
+        published_after: int,
+        published_before: int,
+        order: str,
+        limit: int,
+        offset: int,
+    ) -> list[RssEntry]:
         attempt = 0
 
         async def _do() -> list[RssEntry]:
@@ -110,10 +149,12 @@ class MinifluxClient:
             attempt += 1
             if attempt > 1:
                 logger.warning(
-                    "miniflux entries retry attempt=%s category=%s category_id=%s",
+                    "miniflux entries retry attempt=%s category=%s "
+                    "category_id=%s offset=%s",
                     attempt,
                     category_name,
                     category_id,
+                    offset,
                 )
             try:
                 response = await self.client.get(
@@ -123,15 +164,18 @@ class MinifluxClient:
                         "published_before": published_before,
                         "order": order,
                         "limit": limit,
+                        "offset": offset,
                     },
                 )
                 response.raise_for_status()
             except Exception:
                 logger.error(
-                    "miniflux entries request failed attempt=%s category=%s category_id=%s",
+                    "miniflux entries request failed attempt=%s category=%s "
+                    "category_id=%s offset=%s",
                     attempt,
                     category_name,
                     category_id,
+                    offset,
                     exc_info=True,
                 )
                 raise
@@ -152,7 +196,7 @@ class MinifluxClient:
                 )
                 raise TypeError("invalid miniflux entries field")
 
-            entries = [
+            return [
                 RssEntry(
                     id=raw["id"],
                     title=raw["title"],
@@ -163,13 +207,6 @@ class MinifluxClient:
                 )
                 for raw in raw_entries
             ]
-            if not entries:
-                logger.warning(
-                    "miniflux returned empty entries category=%s category_id=%s",
-                    category_name,
-                    category_id,
-                )
-            return entries
 
         return await self._retrying(_do)
 

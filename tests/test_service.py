@@ -8,7 +8,6 @@ import httpx
 import pytest
 from pydantic import HttpUrl
 
-from news.settings import Aggregation
 from news.digest.llm_client import LlmClient
 from news.digest.miniflux_client import MinifluxClient
 from news.digest.prompts import (
@@ -23,7 +22,7 @@ from news.digest.schemas import (
     RssEntry,
 )
 from news.digest.service import DigestService, PipelineError
-from news.settings import Settings
+from news.settings import Aggregation, Settings
 
 NOW = datetime(2026, 7, 17, 12, 0, 0)
 
@@ -267,13 +266,13 @@ async def test_fetch_entries_maps_and_truncates(
     ]
 
 
-async def test_extract_groups_calls_trending_then_grouping(
+async def test_extract_groups_calls_grouping(
     settings_stub: Settings,
     fake_llm: type[FakeLlm],
 ) -> None:
     # Arrange
     response = NewsResponse(records=[NewsRecord(title="T", links=[])])
-    llm = fake_llm(chat_results=["TRENDS"], chat_parsed_results=[response])
+    llm = fake_llm(chat_parsed_results=[response])
     service = DigestService(
         settings_stub,
         cast(MinifluxClient, object()),
@@ -288,34 +287,11 @@ async def test_extract_groups_calls_trending_then_grouping(
 
     # Assert
     assert records == response.records
-    assert llm.chat_calls[0][0] == settings_stub.model_trending
     model, messages, response_format, _ = llm.chat_parsed_calls[0]
     assert model == settings_stub.model_grouping
     assert response_format is NewsResponse
-    assert "TRENDS" in messages[0]["content"]
     assert "FOCUS" in messages[0]["content"]
     assert messages[1]["content"] == grouping_user_prompt("FORMATTED")
-
-
-async def test_extract_groups_raises_on_none_trending(
-    settings_stub: Settings,
-    fake_llm: type[FakeLlm],
-) -> None:
-    # Arrange
-    llm = fake_llm(chat_results=[None])
-    service = DigestService(
-        settings_stub,
-        cast(MinifluxClient, object()),
-        cast(LlmClient, llm),
-    )
-
-    # Act / Assert
-    with pytest.raises(PipelineError):
-        await service.extract_groups(
-            "FORMATTED",
-            focus="FOCUS",
-        )
-    assert llm.chat_parsed_calls == []
 
 
 async def test_extract_groups_raises_on_none_grouping(
@@ -323,7 +299,7 @@ async def test_extract_groups_raises_on_none_grouping(
     fake_llm: type[FakeLlm],
 ) -> None:
     # Arrange
-    llm = fake_llm(chat_results=["TRENDS"], chat_parsed_results=[None])
+    llm = fake_llm(chat_parsed_results=[None])
     service = DigestService(
         settings_stub,
         cast(MinifluxClient, object()),
@@ -539,7 +515,7 @@ async def test_run_pipeline_happy_path_writes_refined_digest(
     )
     miniflux = fake_miniflux(entries=[raw])
     llm = fake_llm(
-        chat_results=["TRENDS", "REFINED"],
+        chat_results=["REFINED"],
         chat_parsed_results=[
             NewsResponse(
                 records=[
@@ -571,7 +547,7 @@ async def test_run_pipeline_happy_path_writes_refined_digest(
         {
             "title": "T",
             "refined_summary": "REFINED",
-            "links": ["http://x/"],
+            "links": ["http://x"],
         }
     ]
 
@@ -593,7 +569,7 @@ async def test_run_pipeline_partial_refinement_failure_still_writes(
     )
     miniflux = fake_miniflux(entries=[raw])
     llm = fake_llm(
-        chat_results=["TRENDS", "R1", RuntimeError("boom")],
+        chat_results=["R1", RuntimeError("boom")],
         chat_parsed_results=[
             NewsResponse(
                 records=[
@@ -680,7 +656,7 @@ async def test_run_pipeline_grouping_failure_writes_nothing(
         source="Feed",
     )
     miniflux = fake_miniflux(entries=[raw])
-    llm = fake_llm(chat_results=[RuntimeError("boom")])
+    llm = fake_llm(chat_parsed_results=[RuntimeError("boom")])
 
     # Act / Assert
     with pytest.raises(RuntimeError):

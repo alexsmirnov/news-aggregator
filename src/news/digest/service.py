@@ -13,7 +13,6 @@ from news.digest.prompts import (
     grouping_user_prompt,
     refinement_system_prompt,
     refinement_user_prompt,
-    trending_query,
 )
 from news.digest.schemas import (
     Digest,
@@ -159,9 +158,8 @@ class DigestService:
         if not parsed_response.records:
             logger.warning("grouping produced empty records")
         logger.info(
-            "extracted groups records_count=%s trending_chars=%s",
+            "extracted groups records_count=%s",
             len(parsed_response.records),
-            len(trending),
         )
         return parsed_response.records
 
