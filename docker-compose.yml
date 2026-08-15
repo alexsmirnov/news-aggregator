@@ -1,4 +1,18 @@
 services:
+  news:
+    build: .
+    ports:
+      - "4090:4090"
+    depends_on:
+      - miniflux
+    environment:
+      - MINIFLUX_API_BASE=http://miniflux:8080
+      - MINIFLUX_API_KEY=${MINIFLUX_API_KEY:?MINIFLUX_API_KEY is required}
+      - LITELLM_API_KEY=${LITELLM_API_KEY:?LITELLM_API_KEY is required}
+      - LITELLM_ROUTER=${LITELLM_ROUTER:?LITELLM_ROUTER is required}
+      - DIGEST_OUTPUT_DIR=/app/digests
+    volumes:
+      - news-digests:/app/digests
   miniflux:
     image: ${MINIFLUX_IMAGE:-miniflux/miniflux:latest}
     container_name: miniflux
@@ -33,5 +47,6 @@ services:
       interval: 10s
       start_period: 30s
 volumes:
+  news-digests:
   miniflux-db:
     external: true
