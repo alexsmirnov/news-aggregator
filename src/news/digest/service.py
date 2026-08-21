@@ -6,6 +6,7 @@ from pathlib import Path
 import aiofiles
 from bs4 import BeautifulSoup
 
+from news.digest.archive import digest_path
 from news.digest.llm_client import LlmClient
 from news.digest.miniflux_client import MinifluxClient
 from news.digest.prompts import (
@@ -301,12 +302,7 @@ class DigestService:
         *,
         name: str,
     ) -> Path:
-        path = (
-            output_dir
-            / f"{today:%Y}"
-            / f"{today:%m}"
-            / f"{name}-{today:%d}.json"
-        )
+        path = digest_path(output_dir, name, today)
         logger.info(
             "writing digest path=%s records_count=%s",
             path,

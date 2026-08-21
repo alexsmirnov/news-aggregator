@@ -1,3 +1,5 @@
+from datetime import date
+
 from pydantic import BaseModel, Field
 
 
@@ -28,3 +30,25 @@ class DigestRecord(BaseModel):
 class Digest(BaseModel):
     generated_at: str
     records: list[DigestRecord]
+
+
+class NavLink(BaseModel):
+    label: str
+    url: str
+    current: bool = False
+
+
+class RecordView(BaseModel):
+    title: str
+    summary: str
+    links: list[str]
+
+
+class DigestPage(BaseModel):
+    name: str
+    day: date | None
+    generated_at: str | None
+    records: list[RecordView]
+    aggregations: list[NavLink]
+    older: NavLink | None
+    newer: NavLink | None

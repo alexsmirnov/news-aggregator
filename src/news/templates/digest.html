@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block title %}{% if page.day %}{{ page.name }} · {{ page.day }} - News Aggregator{% else %}News Aggregator{% endif %}{% endblock %}
+
+{% block main_class %}digest{% endblock %}
+
+{% block content %}
+<nav class="aggregations">
+  {% for link in page.aggregations %}
+  <a href="{{ link.url }}"{% if link.current %} class="current"{% endif %}>{{ link.label }}</a>
+  {% endfor %}
+</nav>
+
+{% if page.day %}
+<h1>{{ page.name }} · {{ page.day }}</h1>
+<nav class="dates">
+  {% if page.older %}<a href="{{ page.older.url }}">&larr; {{ page.older.label }}</a>{% endif %}
+  {% if page.newer %}<a href="{{ page.newer.url }}">{{ page.newer.label }} &rarr;</a>{% endif %}
+</nav>
+
+{% for record in page.records %}
+<details>
+  <summary>{{ record.title }}</summary>
+  <p class="summary">{{ record.summary }}</p>
+  <ul>
+    {% for link in record.links %}
+    <li><a href="{{ link }}" target="_blank" rel="noopener noreferrer">{{ link }}</a></li>
+    {% endfor %}
+  </ul>
+</details>
+{% endfor %}
+{% else %}
+<p>No digests available yet</p>
+{% endif %}
+{% endblock %}

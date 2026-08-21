@@ -1,23 +1,12 @@
-import re
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.conftest import body_text, title_text
 
 import news.server
 
-
-def body_text(html: str) -> str:
-    body = re.search(r"<body[^>]*>(.*?)</body>", html, re.DOTALL)
-    assert body is not None
-    text = re.sub(r"<[^>]+>", "", body.group(1))
-    return " ".join(text.split())
-
-
-def title_text(html: str) -> str:
-    title = re.search(r"<title>(.*?)</title>", html, re.DOTALL)
-    assert title is not None
-    return title.group(1).strip()
+_ = (body_text, title_text)  # re-exported for tests in this module
 
 
 @pytest.fixture
@@ -83,7 +72,10 @@ def test_home_page_title_and_body_text(client: TestClient) -> None:
 
     # Assert
     assert title_text(response.text) == "News Aggregator"
-    assert body_text(response.text) == "Hello World"
+    assert (
+        body_text(response.text)
+        == "news economy technology No digests available yet"
+    )
 
 
 def test_home_page_references_shared_stylesheet_and_favicon(
@@ -117,7 +109,10 @@ def test_home_page_loads_htmx_from_base_layout(client: TestClient) -> None:
         'CeCpFReSfwBWDTKpkzPP8c+cLsK+V"' in response.text
     )
     assert 'crossorigin="anonymous"' in response.text
-    assert body_text(response.text) == "Hello World"
+    assert (
+        body_text(response.text)
+        == "news economy technology No digests available yet"
+    )
 
 
 def test_home_page_responds_to_head_request(client: TestClient) -> None:

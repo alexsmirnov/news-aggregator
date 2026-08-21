@@ -34,3 +34,41 @@ h1 {
   line-height: 0.95;
   letter-spacing: -0.04em;
 }
+
+body:has(.digest) {
+  place-items: start center;
+}
+
+.digest h1 {
+  font-size: clamp(1.5rem, 5vw, 2.5rem);
+  padding-top: 0.5rem;
+}
+
+.digest nav a {
+  margin-right: 0.75rem;
+}
+
+.digest nav a.current {
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.digest details {
+  margin: 0.75rem 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+.digest summary {
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.digest .summary {
+  white-space: pre-wrap;
+}
+
+.digest ul {
+  overflow-wrap: anywhere;
+}
