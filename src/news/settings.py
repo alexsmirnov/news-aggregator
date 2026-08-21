@@ -19,9 +19,27 @@ NEWS_FOCUS: str = (
     "- Midterm elections and U.S. political parties\n"
     "- Bay Area news"
 )
+Economy_FOCUS="""
+- Global economy
+- United States economy
+- Stock trends, sell offs and growing. For both individual companies and sectors
+- Money and crypto currencies
+- Events in industries, politics, and technologies that may affect stock markets
+- Analytics and expert predictions
+- Investment recommendations
+"""
+Technology_FOCUS="""- Artificial intelligence and related technologies
+- Software security, new discovered vulnurabilites, safety recommendations
+- New software releases
+- Software development tools
+- Hardware news
+- IT Operations, especially in cloud
+- Software development best practices"""
 
 DEFAULT_AGGREGATIONS: list[Aggregation] = [
     Aggregation(name="news", miniflux_category="news", focus=NEWS_FOCUS),
+    Aggregation(name="economy", miniflux_category="Economy", focus=Economy_FOCUS),
+    Aggregation(name="technology", miniflux_category="Technology", focus=Technology_FOCUS),
 ]
 
 
