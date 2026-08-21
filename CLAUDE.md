@@ -12,10 +12,11 @@ Aggregation:
 # Technology
 
 FastAPI Python application, run in docker container.
+
 Aggregator runs as periodical job inside fastapi server.
 AI calls using OpenAI compatible router and client library
 Uv tool to manage dependencies
-Plain HTML generated from templates and aggregated news JSON files
+Plain HTML generated from jinja2 templates and aggregated news
 Plain CSS
 Dynamic content and actions in browser use htmx
 

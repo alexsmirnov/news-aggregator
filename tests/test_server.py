@@ -100,6 +100,62 @@ def test_home_page_references_shared_stylesheet_and_favicon(
     assert 'href="/favicon.svg"' in response.text
 
 
+def test_home_page_loads_htmx_from_base_layout(client: TestClient) -> None:
+    # Arrange
+    path = "/"
+
+    # Act
+    response = client.get(path)
+
+    # Assert
+    assert (
+        "https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js"
+        in response.text
+    )
+    assert (
+        'integrity="sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/'
+        'CeCpFReSfwBWDTKpkzPP8c+cLsK+V"' in response.text
+    )
+    assert 'crossorigin="anonymous"' in response.text
+    assert body_text(response.text) == "Hello World"
+
+
+def test_home_page_responds_to_head_request(client: TestClient) -> None:
+    # Arrange
+    path = "/"
+
+    # Act
+    response = client.head(path, follow_redirects=False)
+
+    # Assert
+    assert response.status_code == 200
+
+
+def test_home_page_declares_doctype_and_language(
+    client: TestClient,
+) -> None:
+    # Arrange
+    path = "/"
+
+    # Act
+    response = client.get(path)
+
+    # Assert
+    assert response.text.lstrip().lower().startswith("<!doctype html>")
+    assert 'lang="en"' in response.text
+
+
+def test_home_page_is_not_in_openapi_schema(client: TestClient) -> None:
+    # Arrange
+    path = "/openapi.json"
+
+    # Act
+    response = client.get(path)
+
+    # Assert
+    assert "/" not in response.json()["paths"]
+
+
 def test_stylesheet_loads(client: TestClient) -> None:
     # Arrange
     path = "/style.css"
