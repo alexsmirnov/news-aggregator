@@ -378,9 +378,11 @@ class DigestService:
         for aggregation in self.settings.aggregations:
             try:
                 paths.append(await self._run_pipeline(aggregation, now))
-            except Exception as exc:
+            except Exception:
                 logger.error(
-                    "aggregation %s failed: %s", aggregation.name, exc
+                    "aggregation failed aggregation=%s",
+                    aggregation.name,
+                    exc_info=True,
                 )
         logger.info(
             "news digests written count=%s paths=%s", len(paths), paths

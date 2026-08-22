@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 from datetime import timedelta
 from pathlib import Path
 
@@ -73,7 +74,8 @@ async def test_lifespan_starts_scheduler_with_interval_job(
         assert job.trigger.interval == timedelta(hours=12)
         assert job.max_instances == 1
         assert job.coalesce is True
-        assert isinstance(job.func, DigestService)
+        assert inspect.iscoroutinefunction(job.func)
+        assert isinstance(job.func.__self__, DigestService)
         assert job.args == ()
 
 

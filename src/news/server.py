@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 
+from news.aggregate import router as aggregate_router
 from news.digest.llm_client import llm_client
 from news.digest.miniflux_client import miniflux_client
 from news.digest.service import DigestService
@@ -12,6 +13,7 @@ from news.settings import Settings
 def create_app() -> FastAPI:
     """Create the News Aggregator web application."""
     app = FastAPI(lifespan=scheduler_lifespan)
+    app.include_router(aggregate_router)
     app.include_router(pages_router)
     app.frontend("/", directory=FRONTEND_DIR, fallback="404.html")
     return app

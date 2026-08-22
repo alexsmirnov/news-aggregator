@@ -1,3 +1,5 @@
+from collections.abc import Generator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -7,6 +9,41 @@ from tests.conftest import body_text, title_text
 import news.server
 
 _ = (body_text, title_text)  # re-exported for tests in this module
+
+
+class FakeJob:
+    def __init__(self, next_run_time: datetime) -> None:
+        self.id = "news_digest"
+        self.pending = False
+        self.next_run_time = next_run_time
+
+    def modify(self, **changes: datetime) -> None:
+        self.next_run_time = changes["next_run_time"]
+
+
+class FakeScheduler:
+    def __init__(self, job: FakeJob | None, *, running: bool = True) -> None:
+        self.job = job
+        self.running = running
+
+    def get_job(self, job_id: str) -> FakeJob | None:
+        return self.job if job_id == "news_digest" else None
+
+
+class FixedDatetime(datetime):
+    current: datetime
+
+    @classmethod
+    def now(cls, tz: object = None) -> datetime:
+        return cls.current
+
+
+@pytest.fixture
+def scheduler_job() -> Generator[FakeJob]:
+    job = FakeJob(datetime(2026, 8, 23, 12, tzinfo=UTC))
+    news.server.app.state.scheduler = FakeScheduler(job)
+    yield job
+    del news.server.app.state.scheduler
 
 
 @pytest.fixture
@@ -47,6 +84,70 @@ async def test_run_aggregate_builds_service_from_settings_and_calls_it(
     assert constructed["miniflux"] is not None
     assert constructed["llm"] is not None
     assert constructed["called"] is True
+
+
+def test_get_aggregate_returns_scheduler_job_status(
+    client: TestClient, scheduler_job: FakeJob
+) -> None:
+    # Act
+    response = client.get("/aggregate")
+
+    # Assert
+    assert response.status_code == 200
+    assert response.json() == {
+        "job_id": "news_digest",
+        "scheduler_running": True,
+        "job_pending": False,
+        "next_run_time": "2026-08-23T12:00:00Z",
+    }
+
+
+def test_post_aggregate_schedules_job_immediately(
+    client: TestClient,
+    scheduler_job: FakeJob,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Arrange
+    now = datetime(2026, 8, 23, 13, tzinfo=UTC)
+    FixedDatetime.current = now
+    monkeypatch.setattr("news.aggregate.datetime", FixedDatetime)
+
+    # Act
+    response = client.post("/aggregate")
+
+    # Assert
+    assert response.status_code == 202
+    assert scheduler_job.next_run_time == now
+    assert response.json()["next_run_time"] == "2026-08-23T13:00:00Z"
+
+
+@pytest.mark.parametrize("method", ["get", "post"])
+def test_aggregate_returns_unavailable_when_scheduler_job_is_missing(
+    client: TestClient, scheduler_job: FakeJob, method: str
+) -> None:
+    # Arrange
+    news.server.app.state.scheduler = FakeScheduler(None)
+
+    # Act
+    response = getattr(client, method)("/aggregate")
+
+    # Assert
+    assert response.status_code == 503
+
+
+def test_post_aggregate_returns_unavailable_when_scheduler_is_stopped(
+    client: TestClient, scheduler_job: FakeJob
+) -> None:
+    # Arrange
+    news.server.app.state.scheduler = FakeScheduler(
+        scheduler_job, running=False
+    )
+
+    # Act
+    response = client.post("/aggregate")
+
+    # Assert
+    assert response.status_code == 503
 
 
 def test_home_page_returns_ok_html_without_redirect(

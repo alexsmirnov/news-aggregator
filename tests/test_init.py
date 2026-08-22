@@ -1,10 +1,11 @@
+import logging
 import sys
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 import news
-from news import _parse_args
+from news import UVICORN_LOG_CONFIG, _parse_args, configure_logging
 
 
 def test_parse_args_no_argv_defaults_to_server_with_current_defaults() -> None:
@@ -73,12 +74,45 @@ def test_parse_args_help_flag_raises_system_exit_zero() -> None:
     assert exc_info.value.code == 0
 
 
+def test_configure_logging_defaults_to_info_with_timestamp_and_logger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Arrange
+    basic_config = Mock()
+    monkeypatch.setattr(logging, "basicConfig", basic_config)
+
+    # Act
+    configure_logging()
+
+    # Assert
+    basic_config.assert_called_once_with(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        force=True,
+    )
+
+
+def test_uvicorn_logging_config_preserves_access_logs() -> None:
+    # Assert
+    access_logger = UVICORN_LOG_CONFIG["loggers"]["uvicorn.access"]
+    access_formatter = UVICORN_LOG_CONFIG["formatters"]["access"]["fmt"]
+    assert access_logger == {
+        "handlers": ["access"],
+        "level": "INFO",
+        "propagate": False,
+    }
+    assert "%(asctime)s" in access_formatter
+    assert "%(name)s" in access_formatter
+    assert "%(request_line)s" in access_formatter
+
+
 def test_main_no_args_runs_uvicorn_with_default_options(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Arrange
     mock_uvicorn = Mock()
     monkeypatch.setattr(sys, "argv", ["news"])
+    monkeypatch.setattr(news, "configure_logging", Mock())
     monkeypatch.setattr(news, "uvicorn", mock_uvicorn)
 
     # Act
@@ -86,7 +120,11 @@ def test_main_no_args_runs_uvicorn_with_default_options(
 
     # Assert
     mock_uvicorn.run.assert_called_once_with(
-        "news.server:app", host="0.0.0.0", port=4090, reload=True
+        "news.server:app",
+        host="0.0.0.0",
+        port=4090,
+        reload=True,
+        log_config=UVICORN_LOG_CONFIG,
     )
 
 
@@ -108,6 +146,7 @@ def test_main_server_command_with_overrides_runs_uvicorn_with_overrides(
             "--no-reload",
         ],
     )
+    monkeypatch.setattr(news, "configure_logging", Mock())
     monkeypatch.setattr(news, "uvicorn", mock_uvicorn)
 
     # Act
@@ -115,7 +154,11 @@ def test_main_server_command_with_overrides_runs_uvicorn_with_overrides(
 
     # Assert
     mock_uvicorn.run.assert_called_once_with(
-        "news.server:app", host="1.2.3.4", port=9000, reload=False
+        "news.server:app",
+        host="1.2.3.4",
+        port=9000,
+        reload=False,
+        log_config=UVICORN_LOG_CONFIG,
     )
 
 
@@ -126,6 +169,7 @@ def test_main_aggregate_command_runs_aggregate_and_skips_uvicorn(
     mock_uvicorn = Mock()
     async_mock = AsyncMock()
     monkeypatch.setattr(sys, "argv", ["news", "aggregate"])
+    monkeypatch.setattr(news, "configure_logging", Mock())
     monkeypatch.setattr(news, "uvicorn", mock_uvicorn)
     monkeypatch.setattr(news, "run_aggregate", async_mock)
 

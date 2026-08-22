@@ -10,6 +10,8 @@ from news.digest.miniflux_client import MinifluxClient, miniflux_client
 from news.digest.service import DigestService
 from news.settings import Settings
 
+NEWS_DIGEST_JOB_ID = "news_digest"
+
 
 def build_scheduler(
     settings: Settings, miniflux: MinifluxClient, llm: LlmClient
@@ -17,9 +19,9 @@ def build_scheduler(
     scheduler = AsyncIOScheduler()
     service = DigestService(settings, miniflux, llm)
     scheduler.add_job(
-        service,
+        service.__call__,
         IntervalTrigger(hours=settings.schedule_interval_hours),
-        id="news_digest",
+        id=NEWS_DIGEST_JOB_ID,
         max_instances=1,
         coalesce=True,
     )
