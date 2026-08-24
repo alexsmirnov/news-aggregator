@@ -6,6 +6,7 @@ from typing import cast
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+import openai
 import pytest
 import pytest_asyncio
 from deepeval.models import GPTModel
@@ -91,7 +92,10 @@ async def grouping_run(
         content_max_chars=eval_settings.grouping_content_max_chars,
     )
     llm = LlmClient(
-        eval_settings.litellm_api_key, str(eval_settings.litellm_router)
+        openai.AsyncOpenAI(
+            api_key=eval_settings.litellm_api_key.get_secret_value(),
+            base_url=str(eval_settings.litellm_router),
+        )
     )
     service = DigestService(
         eval_settings,
@@ -119,7 +123,10 @@ async def refined_run(
 ) -> list[DigestRecord]:
     _, _, records = grouping_run
     llm = LlmClient(
-        eval_settings.litellm_api_key, str(eval_settings.litellm_router)
+        openai.AsyncOpenAI(
+            api_key=eval_settings.litellm_api_key.get_secret_value(),
+            base_url=str(eval_settings.litellm_router),
+        )
     )
     service = DigestService(
         eval_settings,

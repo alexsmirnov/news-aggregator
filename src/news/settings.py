@@ -19,14 +19,17 @@ NEWS_FOCUS: str = (
     "- Midterm elections and U.S. political parties\n"
     "- Bay Area news"
 )
-Economy_FOCUS="""
+
+TICKETS=["CRM","NBIS","NVDA","AMZN","CBRS","GOOG","BND","PG"]
+Economy_FOCUS=f"""
 - Global economy
 - United States economy
-- Stock trends, sell offs and growing. For both individual companies and sectors
+- Stock trends, falls, sell offs and risings. For both individual companies and industry sectors
 - Money and crypto currencies
 - Events in industries, politics, and technologies that may affect stock markets
 - Analytics and expert predictions
 - Investment recommendations
+- Related to those stock tickets {','.join(TICKETS)} or US Treasures bonds
 """
 Technology_FOCUS="""- Artificial intelligence and related technologies
 - Software security, new discovered vulnurabilites, safety recommendations
@@ -60,9 +63,9 @@ class Settings(BaseSettings):
     grouping_content_max_chars: int = 300
     refine_max_links: int = 10
     model_trending: str = "sonar-reasoning-pro"
-    model_grouping: str = "gpt-5-terra"
+    model_grouping: str = "gpt"
     model_refinement: str = "gemini-flash"
-    eval_judge_model: str = "gpt-5-luna"
+    eval_judge_model: str = "gpt-5-terra"
     retry_attempts: int = 3
     retry_min_wait_s: int = 2
     retry_max_wait_s: int = 30

@@ -150,8 +150,8 @@ class DigestService:
                 },
             ],
             response_format=NewsResponse,
-            reasoning_effort="high",
-            temperature=1.0,
+            reasoning_effort="medium",
+            temperature=0.1,
         )
         if parsed_response is None:
             logger.warning("grouping query returned empty content")

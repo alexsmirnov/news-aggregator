@@ -33,13 +33,7 @@ def make_response(content: str | None) -> types.SimpleNamespace:
 
 @pytest.fixture
 def make_client(fake_openai: types.SimpleNamespace) -> LlmClient:
-    return LlmClient(
-        api_key="k",
-        base_url="http://router.test",
-        client=fake_openai,
-        attempts=3,
-        max_wait=0,
-    )
+    return LlmClient(fake_openai, attempts=3, max_wait=0)
 
 
 @pytest.fixture
@@ -169,6 +163,43 @@ async def test_llm_client_factory_configures_and_closes_client(
 
     # Assert
     openai_client.close.assert_awaited_once()
+
+
+async def test_llm_client_factory_propagates_retry_settings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+    connection_error: openai.APIConnectionError,
+):
+    # Arrange
+    fake_openai = types.SimpleNamespace(
+        chat=types.SimpleNamespace(
+            completions=types.SimpleNamespace(create=AsyncMock())
+        ),
+        close=AsyncMock(),
+    )
+    fake_openai.chat.completions.create.side_effect = [
+        connection_error,
+        connection_error,
+    ]
+    monkeypatch.setattr(
+        "news.digest.llm_client.openai.AsyncOpenAI", lambda **_: fake_openai
+    )
+    settings = Settings(
+        miniflux_api_base="http://miniflux.test",
+        miniflux_api_key="unused",
+        litellm_api_key="secret",
+        litellm_router="http://router.test",
+        digest_output_dir=tmp_path,
+        retry_attempts=2,
+        retry_min_wait_s=0,
+        retry_max_wait_s=0,
+    )
+
+    # Act / Assert
+    async with llm_client(settings) as client:
+        with pytest.raises(openai.APIConnectionError):
+            await client.chat(model="m", messages=[])
+    assert fake_openai.chat.completions.create.await_count == 2
 
 
 async def test_llm_client_factory_closes_client_when_context_body_raises(

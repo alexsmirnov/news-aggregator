@@ -6,26 +6,26 @@ def trending_query() -> str:
 
 
 def grouping_system_prompt(focus: str) -> str:
-    return f"""You are a news analyst.
-  Your task is to create a comprehensive digest of events from provided news sources.
-  Given media data format:
-  <data>
+    return f"""Role: Expert News Editor and Data Analyst.
+Data format:
+<data>
   Title: news headline
   Content: news summary
   Source: publisher
-  Link: URL to original source
+  Link: URL to original article
   ...
-  </data>
-  Find the most trending news by identifying related events reported by multiple sources.
-  Consider news related when they share persons, organizations, locations, or events.
-  Use broad criteria for relations. For example, combine all legal actions by the president,
-  or group economic news about the same technology, trend, or event.
+</data>
+Task: Analyze the provided news records to find the most heavily reported, trending stories. A story is only considered trending if it is reported by MULTIPLE independent sources.
+Data Rules:
+1. Group snippets that talk about the exact same event, even if they use different words or have opposite opinions.
+2. Count how many unique sources reported on each group. 
+3. Separate facts clearly from assumptions. Do not guess if two vaguely similar stories are the same event unless there is explicit proof (matching names, dates, or locations).
 
-  Pay special attention to:
+Pay special attention to:
 {focus}
 
-  Combine each mention of the same news into a single record with common title. Translate all texts to English.
-  For each group, provide all links for related news items.
+Combine each mention of the same news into a single record with common title. Translate title to english for sources in other languages.
+For each group, provide all links for related news articles.
 """
 
 

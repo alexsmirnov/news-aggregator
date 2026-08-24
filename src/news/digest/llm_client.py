@@ -5,7 +5,7 @@ from typing import Any, TypeVar, cast
 
 import openai
 from openai.types.chat import ChatCompletionMessageParam
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel
 from tenacity import (
     AsyncRetrying,
     retry_if_exception_type,
@@ -24,22 +24,13 @@ logger = logging.getLogger(__name__)
 class LlmClient:
     def __init__(
         self,
-        api_key: str | SecretStr,
-        base_url: str,
-        client: openai.AsyncOpenAI | None = None,
+        client: openai.AsyncOpenAI,
         *,
         attempts: int = 3,
         min_wait: int = 2,
         max_wait: int = 30,
     ) -> None:
-        key = (
-            api_key.get_secret_value()
-            if isinstance(api_key, SecretStr)
-            else api_key
-        )
-        self.client = client or openai.AsyncOpenAI(
-            api_key=key, base_url=str(base_url), timeout=60.0
-        )
+        self.client = client
         self._retrying = AsyncRetrying(
             stop=stop_after_attempt(attempts),
             wait=wait_exponential(
@@ -131,7 +122,17 @@ class LlmClient:
 
 @asynccontextmanager
 async def llm_client(settings: Settings) -> AsyncGenerator[LlmClient]:
-    client = LlmClient(settings.litellm_api_key, str(settings.litellm_router))
+    openai_client = openai.AsyncOpenAI(
+        api_key=settings.litellm_api_key.get_secret_value(),
+        base_url=str(settings.litellm_router),
+        timeout=180.0,
+    )
+    client = LlmClient(
+        openai_client,
+        attempts=settings.retry_attempts,
+        min_wait=settings.retry_min_wait_s,
+        max_wait=settings.retry_max_wait_s,
+    )
     try:
         yield client
     finally:
