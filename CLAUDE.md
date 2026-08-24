@@ -23,3 +23,7 @@ Dynamic content and actions in browser use htmx
 # Deployment
 
 Application deployed as docker container by docker compose, together with Miniflux and postgresql
+This is personal application, only available in local network
+
+# Documentation
+@docs/index.md
