@@ -7,11 +7,10 @@ import aiofiles
 from bs4 import BeautifulSoup
 
 from news.digest.archive import digest_path
+from news.digest.grouping import Grouping
 from news.digest.llm_client import LlmClient
 from news.digest.miniflux_client import MinifluxClient
 from news.digest.prompts import (
-    grouping_system_prompt,
-    grouping_user_prompt,
     refinement_system_prompt,
     refinement_user_prompt,
 )
@@ -19,7 +18,6 @@ from news.digest.schemas import (
     Digest,
     DigestRecord,
     NewsRecord,
-    NewsResponse,
     RssEntry,
 )
 from news.settings import Aggregation, Settings
@@ -29,45 +27,23 @@ logger = logging.getLogger(__name__)
 MAX_CONCURRENT_REFINEMENTS = 8
 
 
-class PipelineError(Exception):
-    pass
-
-
 class DigestService:
     def __init__(
-        self, settings: Settings, miniflux: MinifluxClient, llm: LlmClient
+        self,
+        settings: Settings,
+        miniflux: MinifluxClient,
+        llm: LlmClient,
+        grouping: Grouping,
     ) -> None:
         self.settings = settings
         self.miniflux = miniflux
         self.llm = llm
+        self.grouping = grouping
 
     @staticmethod
     def strip_html(entry_content: str) -> str:
         return BeautifulSoup(entry_content, "html.parser").get_text(
             " ", strip=True
-        )
-
-    @staticmethod
-    def format_entry(
-        index: int, entry: RssEntry, *, content_max_chars: int
-    ) -> str:
-        return (
-            f"# Entity {index}\n"
-            f"Title: {entry.title}\n"
-            f"Content: {entry.content[:content_max_chars]}\n"
-            f"Source: {entry.source}\n"
-            f"Link: {entry.link}\n"
-        )
-
-    @staticmethod
-    def format_entries(
-        entries: list[RssEntry], *, content_max_chars: int
-    ) -> str:
-        return "\n".join(
-            DigestService.format_entry(
-                e.id, e, content_max_chars=content_max_chars
-            )
-            for e in entries
         )
 
     @staticmethod
@@ -124,45 +100,6 @@ class DigestService:
             len(entries),
         )
         return entries
-
-    async def extract_groups(
-        self,
-        formatted_entries: str,
-        *,
-        focus: str,
-    ) -> list[NewsRecord]:
-        logger.info(
-            "extracting groups formatted_entries_chars=%s focus_chars=%s",
-            len(formatted_entries),
-            len(focus),
-        )
-
-        parsed_response = await self.llm.chat_parsed(
-            self.settings.model_grouping,
-            [
-                {
-                    "role": "system",
-                    "content": grouping_system_prompt(focus),
-                },
-                {
-                    "role": "user",
-                    "content": grouping_user_prompt(formatted_entries),
-                },
-            ],
-            response_format=NewsResponse,
-            reasoning_effort="medium",
-            temperature=0.1,
-        )
-        if parsed_response is None:
-            logger.warning("grouping query returned empty content")
-            raise PipelineError("grouping query returned no content")
-        if not parsed_response.records:
-            logger.warning("grouping produced empty records")
-        logger.info(
-            "extracted groups records_count=%s",
-            len(parsed_response.records),
-        )
-        return parsed_response.records
 
     async def refine_record(
         self,
@@ -333,17 +270,8 @@ class DigestService:
         )
         records: list[DigestRecord] = []
         if entries:
-            formatted_entries = self.format_entries(
+            news_records = await self.grouping(
                 entries,
-                content_max_chars=self.settings.grouping_content_max_chars,
-            )
-            logger.info(
-                "formatted entries aggregation=%s formatted_entries_chars=%s",
-                aggregation.name,
-                len(formatted_entries),
-            )
-            news_records = await self.extract_groups(
-                formatted_entries,
                 focus=aggregation.focus,
             )
             records = await self.refine_all(

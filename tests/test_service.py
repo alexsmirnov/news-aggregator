@@ -1,5 +1,4 @@
 import json
-import types
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -7,21 +6,21 @@ from typing import Any, cast
 import httpx
 import pytest
 from pydantic import HttpUrl
+from tests.conftest import FakeLlm, FakeMiniflux
 
+from news.digest.grouping import Grouping
 from news.digest.llm_client import LlmClient
 from news.digest.miniflux_client import MinifluxClient
 from news.digest.prompts import (
-    grouping_user_prompt,
     refinement_system_prompt,
     refinement_user_prompt,
 )
 from news.digest.schemas import (
     Digest,
     NewsRecord,
-    NewsResponse,
     RssEntry,
 )
-from news.digest.service import DigestService, PipelineError
+from news.digest.service import DigestService
 from news.settings import Aggregation, Settings
 
 NOW = datetime(2026, 7, 17, 12, 0, 0)
@@ -33,107 +32,24 @@ class FixedDatetime(datetime):
         return NOW
 
 
-class FakeMiniflux:
-    def __init__(
-        self,
-        entries: list[RssEntry] | None = None,
-        category_error: Exception | None = None,
-        entries_error: Exception | None = None,
-    ) -> None:
-        self.entries = entries if entries is not None else []
-        self.category_error = category_error
-        self.entries_error = entries_error
-        self.calls: list[dict[str, Any]] = []
+class FakeGrouping:
+    def __init__(self, results: list[Any] | None = None) -> None:
+        self.results = list(results or [])
+        self.calls: list[tuple[list[RssEntry], str]] = []
 
-    async def get_entries(
-        self, category_name: str, **kwargs: Any
-    ) -> list[RssEntry]:
-        self.calls.append({"category_name": category_name, **kwargs})
-        if self.category_error is not None:
-            raise self.category_error
-        if self.entries_error is not None:
-            raise self.entries_error
-        return self.entries
-
-
-class FakeLlm:
-    def __init__(
-        self,
-        chat_results: list[Any] | None = None,
-        chat_parsed_results: list[Any] | None = None,
-    ) -> None:
-        self.chat_results = list(chat_results or [])
-        self.chat_parsed_results = list(chat_parsed_results or [])
-        self.chat_calls: list[tuple[Any, ...]] = []
-        self.chat_parsed_calls: list[tuple[Any, ...]] = []
-
-    async def chat(
-        self, model: str, messages: list[dict[str, Any]], **kwargs: Any
-    ) -> Any:
-        self.chat_calls.append((model, messages, kwargs))
-        result = self.chat_results.pop(0)
-        if isinstance(result, Exception):
-            raise result
-        return result
-
-    async def chat_parsed(
-        self,
-        model: str,
-        messages: list[dict[str, Any]],
-        response_format: Any,
-        **kwargs: Any,
-    ) -> Any:
-        self.chat_parsed_calls.append(
-            (model, messages, response_format, kwargs)
-        )
-        result = self.chat_parsed_results.pop(0)
+    async def __call__(
+        self, entries: list[RssEntry], *, focus: str
+    ) -> list[NewsRecord]:
+        self.calls.append((entries, focus))
+        result = self.results.pop(0)
         if isinstance(result, Exception):
             raise result
         return result
 
 
 @pytest.fixture
-def entry() -> RssEntry:
-    return RssEntry(
-        id=42,
-        title="T",
-        content="C",
-        link="http://a",
-        published_at="2026-07-16T10:00:00",
-        source="F",
-    )
-
-
-@pytest.fixture
-def fake_miniflux() -> type[FakeMiniflux]:
-    return FakeMiniflux
-
-
-@pytest.fixture
-def fake_llm() -> type[FakeLlm]:
-    return FakeLlm
-
-
-@pytest.fixture
-def settings_stub(tmp_path: Path) -> Settings:
-    return cast(
-        Settings,
-        types.SimpleNamespace(
-            miniflux_api_base="http://m.test",
-            miniflux_api_key="k",
-            litellm_api_key="l",
-            litellm_router="http://r.test",
-            digest_output_dir=tmp_path,
-            fetch_lookback_hours=24,
-            fetch_limit=10000,
-            entry_content_max_chars=1000,
-            grouping_content_max_chars=300,
-            refine_max_links=10,
-            model_trending="sonar-reasoning-pro",
-            model_grouping="gemini-flash",
-            model_refinement="gemini-flash",
-        ),
-    )
+def fake_grouping() -> type[FakeGrouping]:
+    return FakeGrouping
 
 
 @pytest.fixture
@@ -160,64 +76,12 @@ def test_strip_html_extracts_text() -> None:
     assert text == "Hello World"
 
 
-def test_format_entry_block(entry: RssEntry) -> None:
-    # Act
-    text = DigestService.format_entry(42, entry, content_max_chars=1000)
-
-    # Assert
-    assert text == (
-        "# Entity 42\nTitle: T\nContent: C\nSource: F\nLink: http://a\n"
-    )
-
-
-def test_format_entry_truncates_content_without_mutating_entry(
-    entry: RssEntry,
-) -> None:
-    # Arrange
-    entry.content = "abcdef"
-
-    # Act
-    text = DigestService.format_entry(42, entry, content_max_chars=3)
-
-    # Assert
-    assert "Content: abc\n" in text
-    assert entry.content == "abcdef"
-
-
 def test_format_full_entry_block(entry: RssEntry) -> None:
     # Act
     text = DigestService.format_full_entry(entry)
 
     # Assert
     assert text == "Title: T\nContent: C\nLink: http://a\n"
-
-
-def test_format_entries_joins_blocks() -> None:
-    # Arrange
-    e1 = RssEntry(
-        id=1,
-        title="T1",
-        content="C1",
-        link="http://a",
-        published_at="2026-07-16T10:00:00",
-        source="F1",
-    )
-    e2 = RssEntry(
-        id=2,
-        title="T2",
-        content="C2",
-        link="http://b",
-        published_at="2026-07-16T10:00:00",
-        source="F2",
-    )
-
-    # Act
-    text = DigestService.format_entries([e1, e2], content_max_chars=1000)
-
-    # Assert
-    assert text == DigestService.format_entry(
-        1, e1, content_max_chars=1000
-    ) + "\n" + DigestService.format_entry(2, e2, content_max_chars=1000)
 
 
 async def test_fetch_entries_maps_and_truncates(
@@ -238,6 +102,7 @@ async def test_fetch_entries_maps_and_truncates(
         settings_stub,
         cast(MinifluxClient, client),
         cast(LlmClient, object()),
+        cast(Grouping, object()),
     )
 
     # Act
@@ -266,54 +131,6 @@ async def test_fetch_entries_maps_and_truncates(
     ]
 
 
-async def test_extract_groups_calls_grouping(
-    settings_stub: Settings,
-    fake_llm: type[FakeLlm],
-) -> None:
-    # Arrange
-    response = NewsResponse(records=[NewsRecord(title="T", links=[])])
-    llm = fake_llm(chat_parsed_results=[response])
-    service = DigestService(
-        settings_stub,
-        cast(MinifluxClient, object()),
-        cast(LlmClient, llm),
-    )
-
-    # Act
-    records = await service.extract_groups(
-        "FORMATTED",
-        focus="FOCUS",
-    )
-
-    # Assert
-    assert records == response.records
-    model, messages, response_format, _ = llm.chat_parsed_calls[0]
-    assert model == settings_stub.model_grouping
-    assert response_format is NewsResponse
-    assert "FOCUS" in messages[0]["content"]
-    assert messages[1]["content"] == grouping_user_prompt("FORMATTED")
-
-
-async def test_extract_groups_raises_on_none_grouping(
-    settings_stub: Settings,
-    fake_llm: type[FakeLlm],
-) -> None:
-    # Arrange
-    llm = fake_llm(chat_parsed_results=[None])
-    service = DigestService(
-        settings_stub,
-        cast(MinifluxClient, object()),
-        cast(LlmClient, llm),
-    )
-
-    # Act / Assert
-    with pytest.raises(PipelineError):
-        await service.extract_groups(
-            "FORMATTED",
-            focus="FOCUS",
-        )
-
-
 async def test_refine_record_combines_full_content_and_limits_fetch_links(
     settings_stub: Settings,
     fake_llm: type[FakeLlm],
@@ -340,6 +157,7 @@ async def test_refine_record_combines_full_content_and_limits_fetch_links(
         settings_stub,
         cast(MinifluxClient, object()),
         cast(LlmClient, llm),
+        cast(Grouping, object()),
     )
 
     # Act
@@ -387,6 +205,7 @@ async def test_refine_record_includes_link_in_full_content_unchanged(
         settings_stub,
         cast(MinifluxClient, object()),
         cast(LlmClient, llm),
+        cast(Grouping, object()),
     )
 
     # Act
@@ -412,6 +231,7 @@ async def test_refine_record_returns_none_on_llm_failure(
         settings_stub,
         cast(MinifluxClient, object()),
         cast(LlmClient, llm),
+        cast(Grouping, object()),
     )
 
     # Act
@@ -436,6 +256,7 @@ async def test_refine_record_returns_none_on_none_content(
         settings_stub,
         cast(MinifluxClient, object()),
         cast(LlmClient, llm),
+        cast(Grouping, object()),
     )
 
     # Act
@@ -464,6 +285,7 @@ async def test_refine_all_preserves_order_and_marks_failures(
         settings_stub,
         cast(MinifluxClient, object()),
         cast(LlmClient, llm),
+        cast(Grouping, object()),
     )
 
     # Act
@@ -503,6 +325,7 @@ async def test_run_pipeline_happy_path_writes_refined_digest(
     news_agg: Aggregation,
     fake_miniflux: type[FakeMiniflux],
     fake_llm: type[FakeLlm],
+    fake_grouping: type[FakeGrouping],
 ) -> None:
     # Arrange
     raw = RssEntry(
@@ -514,18 +337,16 @@ async def test_run_pipeline_happy_path_writes_refined_digest(
         source="Feed",
     )
     miniflux = fake_miniflux(entries=[raw])
-    llm = fake_llm(
-        chat_results=["REFINED"],
-        chat_parsed_results=[
-            NewsResponse(
-                records=[
-                    NewsRecord(
-                        title="T",
-                        links=cast(list[HttpUrl], ["http://x"]),
-                    )
-                ]
-            )
-        ],
+    llm = fake_llm(chat_results=["REFINED"])
+    grouping = fake_grouping(
+        results=[
+            [
+                NewsRecord(
+                    title="T",
+                    links=cast(list[HttpUrl], ["http://x"]),
+                )
+            ]
+        ]
     )
 
     # Act
@@ -533,6 +354,7 @@ async def test_run_pipeline_happy_path_writes_refined_digest(
         settings_stub,
         cast(MinifluxClient, miniflux),
         cast(LlmClient, llm),
+        cast(Grouping, grouping),
     )
     path = await service._run_pipeline(news_agg, NOW)
 
@@ -550,6 +372,7 @@ async def test_run_pipeline_happy_path_writes_refined_digest(
             "links": ["http://x"],
         }
     ]
+    assert grouping.calls == [([raw], news_agg.focus)]
 
 
 async def test_run_pipeline_partial_refinement_failure_still_writes(
@@ -557,6 +380,7 @@ async def test_run_pipeline_partial_refinement_failure_still_writes(
     news_agg: Aggregation,
     fake_miniflux: type[FakeMiniflux],
     fake_llm: type[FakeLlm],
+    fake_grouping: type[FakeGrouping],
 ) -> None:
     # Arrange
     raw = RssEntry(
@@ -568,16 +392,14 @@ async def test_run_pipeline_partial_refinement_failure_still_writes(
         source="Feed",
     )
     miniflux = fake_miniflux(entries=[raw])
-    llm = fake_llm(
-        chat_results=["R1", RuntimeError("boom")],
-        chat_parsed_results=[
-            NewsResponse(
-                records=[
-                    NewsRecord(title="T1", links=[]),
-                    NewsRecord(title="T2", links=[]),
-                ]
-            )
-        ],
+    llm = fake_llm(chat_results=["R1", RuntimeError("boom")])
+    grouping = fake_grouping(
+        results=[
+            [
+                NewsRecord(title="T1", links=[]),
+                NewsRecord(title="T2", links=[]),
+            ]
+        ]
     )
 
     # Act
@@ -585,6 +407,7 @@ async def test_run_pipeline_partial_refinement_failure_still_writes(
         settings_stub,
         cast(MinifluxClient, miniflux),
         cast(LlmClient, llm),
+        cast(Grouping, grouping),
     )
     path = await service._run_pipeline(news_agg, NOW)
 
@@ -600,16 +423,19 @@ async def test_run_pipeline_empty_window_writes_empty_digest(
     news_agg: Aggregation,
     fake_miniflux: type[FakeMiniflux],
     fake_llm: type[FakeLlm],
+    fake_grouping: type[FakeGrouping],
 ) -> None:
     # Arrange
     miniflux = fake_miniflux(entries=[])
     llm = fake_llm()
+    grouping = fake_grouping()
 
     # Act
     service = DigestService(
         settings_stub,
         cast(MinifluxClient, miniflux),
         cast(LlmClient, llm),
+        cast(Grouping, grouping),
     )
     path = await service._run_pipeline(news_agg, NOW)
 
@@ -617,6 +443,7 @@ async def test_run_pipeline_empty_window_writes_empty_digest(
     data = json.loads(path.read_text())
     assert data["records"] == []
     assert llm.chat_calls == []
+    assert grouping.calls == []
 
 
 async def test_run_pipeline_fetch_failure_writes_nothing(
@@ -624,10 +451,12 @@ async def test_run_pipeline_fetch_failure_writes_nothing(
     news_agg: Aggregation,
     fake_miniflux: type[FakeMiniflux],
     fake_llm: type[FakeLlm],
+    fake_grouping: type[FakeGrouping],
 ) -> None:
     # Arrange
     miniflux = fake_miniflux(category_error=httpx.ConnectError("down"))
     llm = fake_llm()
+    grouping = fake_grouping()
 
     # Act / Assert
     with pytest.raises(httpx.ConnectError):
@@ -635,6 +464,7 @@ async def test_run_pipeline_fetch_failure_writes_nothing(
             settings_stub,
             cast(MinifluxClient, miniflux),
             cast(LlmClient, llm),
+            cast(Grouping, grouping),
         )
         await service._run_pipeline(news_agg, NOW)
     assert list(settings_stub.digest_output_dir.rglob("*.json")) == []
@@ -645,6 +475,7 @@ async def test_run_pipeline_grouping_failure_writes_nothing(
     news_agg: Aggregation,
     fake_miniflux: type[FakeMiniflux],
     fake_llm: type[FakeLlm],
+    fake_grouping: type[FakeGrouping],
 ) -> None:
     # Arrange
     raw = RssEntry(
@@ -656,7 +487,8 @@ async def test_run_pipeline_grouping_failure_writes_nothing(
         source="Feed",
     )
     miniflux = fake_miniflux(entries=[raw])
-    llm = fake_llm(chat_parsed_results=[RuntimeError("boom")])
+    llm = fake_llm()
+    grouping = fake_grouping(results=[RuntimeError("boom")])
 
     # Act / Assert
     with pytest.raises(RuntimeError):
@@ -664,6 +496,7 @@ async def test_run_pipeline_grouping_failure_writes_nothing(
             settings_stub,
             cast(MinifluxClient, miniflux),
             cast(LlmClient, llm),
+            cast(Grouping, grouping),
         )
         await service._run_pipeline(news_agg, NOW)
     assert list(settings_stub.digest_output_dir.rglob("*.json")) == []
@@ -674,15 +507,18 @@ async def test_run_all_aggregations_runs_each_in_sequence(
     three_aggs: tuple[Aggregation, ...],
     fake_miniflux: type[FakeMiniflux],
     fake_llm: type[FakeLlm],
+    fake_grouping: type[FakeGrouping],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Arrange
     miniflux = fake_miniflux()
     llm = fake_llm()
+    grouping = fake_grouping()
     service = DigestService(
         settings_stub,
         cast(MinifluxClient, miniflux),
         cast(LlmClient, llm),
+        cast(Grouping, grouping),
     )
     calls: list[tuple[Aggregation, datetime]] = []
 
@@ -710,15 +546,18 @@ async def test_run_all_aggregations_failed_one_does_not_block_remaining(
     three_aggs: tuple[Aggregation, ...],
     fake_miniflux: type[FakeMiniflux],
     fake_llm: type[FakeLlm],
+    fake_grouping: type[FakeGrouping],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Arrange
     miniflux = fake_miniflux()
     llm = fake_llm()
+    grouping = fake_grouping()
     service = DigestService(
         settings_stub,
         cast(MinifluxClient, miniflux),
         cast(LlmClient, llm),
+        cast(Grouping, grouping),
     )
     calls: list[tuple[Aggregation, datetime]] = []
 

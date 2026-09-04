@@ -30,7 +30,8 @@ Digest pipeline sub-package: fetches RSS entries from Miniflux, groups and refin
 
 | Module | Responsibility |
 |---|---|
-| `service.py` | `DigestService` pipeline: fetch, HTML strip, entry formatting, LLM grouping, concurrent refinement, digest writing, per-aggregation orchestration; `PipelineError` ([src/news/digest/service.py:29-390](../src/news/digest/service.py#L29-L390)) |
+| `service.py` | `DigestService` pipeline: fetch, HTML strip, entry formatting, concurrent refinement, digest writing, per-aggregation orchestration; grouping delegated to an injected `Grouping` collaborator ([src/news/digest/service.py:30-318](../src/news/digest/service.py#L30-L318)) |
+| `grouping.py` | `Grouping` protocol (`list[RssEntry] -> list[NewsRecord]`); `LlmGrouping` implementation; entry formatting helpers; `PipelineError` ([src/news/digest/grouping.py](../src/news/digest/grouping.py)) |
 | `miniflux_client.py` | `MinifluxClient` HTTP client: category lookup, paginated entry fetching, auth header, transient-error retries; `miniflux_client` factory context manager ([src/news/digest/miniflux_client.py:21-224](../src/news/digest/miniflux_client.py#L21-L224)) |
 | `llm_client.py` | `LlmClient` OpenAI-compatible wrapper: `chat` (raw text) and `chat_parsed` (structured output) with retries; `llm_client` factory context manager ([src/news/digest/llm_client.py:24-138](../src/news/digest/llm_client.py#L24-L138)) |
 | `archive.py` | Read-only archive reader: digest path layout, available dates, digest loading, link sanitization, `build_page` view-model builder ([src/news/digest/archive.py:27-152](../src/news/digest/archive.py#L27-L152)) |

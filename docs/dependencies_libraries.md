@@ -81,7 +81,7 @@ Configured in: [pyproject.toml:94-99](../pyproject.toml#L94-L99)
 ### deepeval `>=4.1`
 LLM evaluation framework: GEval metrics and GPT judge model for the evaluation suite.
 Docs: https://deepeval.docs.confident-ai.com/
-Used in: [tests/evaluation/test_digest_eval.py:5-8](../tests/evaluation/test_digest_eval.py#L5-L8), [tests/evaluation/conftest.py:11](../tests/evaluation/conftest.py#L11)
+Used in: [tests/evaluation/test_grouping_eval.py:4-7](../tests/evaluation/test_grouping_eval.py#L4-L7), [tests/evaluation/test_summary_eval.py:4-6](../tests/evaluation/test_summary_eval.py#L4-L6), [tests/evaluation/conftest.py:13](../tests/evaluation/conftest.py#L13)
 
 ### rouge-score `>=0.1.2`
 ROUGE-L scoring for summary quality evaluation.

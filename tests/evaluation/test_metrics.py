@@ -1,5 +1,5 @@
 import pytest
-from metrics import match_groups, pairwise_prf, rouge_l
+from metrics import links, match_groups, pairwise_prf, rouge_l
 
 
 def test_pairwise_prf_perfect_match() -> None:
@@ -83,3 +83,23 @@ def test_match_groups_pairs_by_link_overlap() -> None:
 
     # Assert
     assert pairs == [(0, 0)]
+
+
+def test_links_extracts_link_set() -> None:
+    # Arrange
+    group = {"title": "T", "links": ["http://a", "http://b"]}
+
+    # Act
+    result = links(group)
+
+    # Assert
+    assert result == {"http://a", "http://b"}
+
+
+def test_links_rejects_non_string_list() -> None:
+    # Arrange
+    group = {"title": "T", "links": ["http://a", 1]}
+
+    # Act / Assert
+    with pytest.raises(ValueError):
+        links(group)

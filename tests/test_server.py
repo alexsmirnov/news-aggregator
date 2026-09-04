@@ -63,11 +63,16 @@ async def test_run_aggregate_builds_service_from_settings_and_calls_it(
 
     class FakeDigestService:
         def __init__(
-            self, settings: object, miniflux: object, llm: object
+            self,
+            settings: object,
+            miniflux: object,
+            llm: object,
+            grouping: object,
         ) -> None:
             constructed["settings"] = settings
             constructed["miniflux"] = miniflux
             constructed["llm"] = llm
+            constructed["grouping"] = grouping
             constructed["called"] = False
 
         async def __call__(self) -> list[object]:
@@ -83,6 +88,7 @@ async def test_run_aggregate_builds_service_from_settings_and_calls_it(
     assert constructed["settings"] is not None
     assert constructed["miniflux"] is not None
     assert constructed["llm"] is not None
+    assert constructed["grouping"] is not None
     assert constructed["called"] is True
 
 

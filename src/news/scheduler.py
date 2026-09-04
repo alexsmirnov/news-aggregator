@@ -5,6 +5,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import FastAPI
 
+from news.digest.grouping import LlmGrouping
 from news.digest.llm_client import LlmClient, llm_client
 from news.digest.miniflux_client import MinifluxClient, miniflux_client
 from news.digest.service import DigestService
@@ -17,7 +18,8 @@ def build_scheduler(
     settings: Settings, miniflux: MinifluxClient, llm: LlmClient
 ) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler()
-    service = DigestService(settings, miniflux, llm)
+    grouping = LlmGrouping(settings, llm)
+    service = DigestService(settings, miniflux, llm, grouping)
     scheduler.add_job(
         service.__call__,
         IntervalTrigger(hours=settings.schedule_interval_hours),

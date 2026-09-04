@@ -10,6 +10,7 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
+from news.digest.grouping import Grouping
 from news.digest.llm_client import LlmClient
 from news.digest.miniflux_client import MinifluxClient
 from news.digest.service import DigestService
@@ -30,6 +31,7 @@ async def capture(
         settings,
         client,
         cast(LlmClient, object()),
+        cast(Grouping, object()),
     )
     try:
         entries = await service.fetch_entries(

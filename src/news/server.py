@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 
 from news.aggregate import router as aggregate_router
+from news.digest.grouping import LlmGrouping
 from news.digest.llm_client import llm_client
 from news.digest.miniflux_client import miniflux_client
 from news.digest.service import DigestService
@@ -25,7 +26,9 @@ async def run_aggregate() -> None:
         miniflux_client(settings) as miniflux,
         llm_client(settings) as llm,
     ):
-        await DigestService(settings, miniflux, llm)()
+        await DigestService(
+            settings, miniflux, llm, LlmGrouping(settings, llm)
+        )()
 
 
 app = create_app()

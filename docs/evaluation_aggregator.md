@@ -6,14 +6,18 @@ Quality evaluation for the LLM stages of the digest pipeline — news grouping a
 
 The suite evaluates the two LLM stages of the pipeline (see [Architecture Overview](architecture_overview.md)):
 
-1. **Grouping** — does `extract_groups` ([src/news/digest/service.py:128-165](../src/news/digest/service.py#L128-L165)) cluster entries about the same real-world event together?
-2. **Summarization** — does `refine_all` ([src/news/digest/service.py:264-295](../src/news/digest/service.py#L264-L295)) produce summaries that cover the key facts of human-written reference summaries without invented facts?
+1. **Grouping** — does a `Grouping` implementation ([src/news/digest/grouping.py](../src/news/digest/grouping.py)) cluster entries about the same real-world event together? The default and only registered implementation is `LlmGrouping`.
+2. **Summarization** — does `DigestService.refine_all` ([src/news/digest/service.py:201-233](../src/news/digest/service.py#L201-L233)) produce summaries that cover the key facts of human-written reference summaries without invented facts?
 
-Both stages are executed for real against the configured LLM router (`LITELLM_ROUTER` / `LITELLM_API_KEY`); only the Miniflux client is stubbed out with a dummy object since entries come from frozen files ([tests/evaluation/conftest.py:96-100](../tests/evaluation/conftest.py#L96-L100)).
+Both stages are executed for real against the configured LLM router (`LITELLM_ROUTER` / `LITELLM_API_KEY`); only the Miniflux client is stubbed out with a dummy object since entries come from frozen files ([tests/evaluation/conftest.py:151-156](../tests/evaluation/conftest.py#L151-L156)).
+
+## Grouping Implementation Registry #evaluation
+
+`GROUPING_IMPLEMENTATIONS` ([conftest.py:32-37](../tests/evaluation/conftest.py#L32-L37)) maps a name to a `(Settings, LlmClient) -> Grouping` factory; the suite is parametrized over this registry via the `grouping_name` fixture ([conftest.py:67-69](../tests/evaluation/conftest.py#L67-L69)), so every grouping test id carries the implementation name (e.g. `test_grouping_pairwise_f1[2026_07_22_Economy-llm]`). Adding a new implementation to compare means adding one entry here — no test changes required. `DEFAULT_GROUPING = "llm"` ([conftest.py:37](../tests/evaluation/conftest.py#L37)) is the implementation summary evaluation runs against (see below).
 
 ## Quality Thresholds #evaluation
 
-Constants in [tests/evaluation/test_digest_eval.py:13-15](../tests/evaluation/test_digest_eval.py#L13-L15):
+Constants in [tests/evaluation/conftest.py:28-30](../tests/evaluation/conftest.py#L28-L30):
 
 | Constant | Value | Applies to |
 |---|---|---|
@@ -23,16 +27,23 @@ Constants in [tests/evaluation/test_digest_eval.py:13-15](../tests/evaluation/te
 
 ## Evaluation Tests #evaluation
 
-All four tests are marked `@pytest.mark.integration` (real LLM I/O, excluded from unit runs per the marker definition in [pyproject.toml:65-67](../pyproject.toml#L65-L67)) and are parametrized over every discovered dataset:
+The suite is split into two files, both marked `@pytest.mark.integration` (real LLM I/O, excluded from unit runs per the marker definition in [pyproject.toml:65-67](../pyproject.toml#L65-L67)) and parametrized over every discovered dataset **and** every registered grouping implementation:
 
 | Test | Metric | Assertion |
 |---|---|---|
-| `test_grouping_pairwise_f1` ([test_digest_eval.py:19-37](../tests/evaluation/test_digest_eval.py#L19-L37)) | `pairwise_prf` over predicted vs expected link sets | F1 >= 0.6 |
-| `test_grouping_judge` ([test_digest_eval.py:40-72](../tests/evaluation/test_digest_eval.py#L40-L72)) | deepeval `GEval` "Grouping correctness" over formatted entries (input), actual grouping JSON, expected grouping JSON | judge score >= 0.6 via `assert_test` |
-| `test_summary_rouge_l` ([test_digest_eval.py:75-97](../tests/evaluation/test_digest_eval.py#L75-L97)) | `rouge_l` per matched group | mean >= 0.3 |
-| `test_summary_judge_mean` ([test_digest_eval.py:100-132](../tests/evaluation/test_digest_eval.py#L100-L132)) | deepeval `GEval` "Summary faithfulness" per matched group, awaited sequentially | mean >= 0.6 |
+| `test_grouping_pairwise_f1` ([test_grouping_eval.py:14-32](../tests/evaluation/test_grouping_eval.py#L14-L32)) | `pairwise_prf` over predicted vs expected link sets | F1 >= 0.6 |
+| `test_grouping_judge` ([test_grouping_eval.py:35-67](../tests/evaluation/test_grouping_eval.py#L35-L67)) | deepeval `GEval` "Grouping correctness" over formatted entries (input), actual grouping JSON, expected grouping JSON | judge score >= 0.6 via `assert_test` |
 
-Summary tests match predicted groups to expected groups first (`_matched_summaries`, [test_digest_eval.py:144-169](../tests/evaluation/test_digest_eval.py#L144-L169)): `match_groups` pairs groups by link overlap, then the expected group's title looks up the reference summary; groups without an expected summary are skipped with a warning.
+`test_grouping_eval.py` therefore runs once per `(dataset, grouping implementation)` pair — it is the file to extend when comparing new grouping strategies.
+
+| Test | Metric | Assertion |
+|---|---|---|
+| `test_summary_rouge_l` ([test_summary_eval.py:16-37](../tests/evaluation/test_summary_eval.py#L16-L37)) | `rouge_l` per matched group | mean >= 0.3 |
+| `test_summary_judge_mean` ([test_summary_eval.py:41-72](../tests/evaluation/test_summary_eval.py#L41-L72)) | deepeval `GEval` "Summary faithfulness" per matched group, awaited sequentially | mean >= 0.6 |
+
+`test_summary_eval.py` is collected for every `(dataset, grouping implementation)` combination too, but the underlying `refined_run` fixture skips (does not fail) whenever `grouping_name != DEFAULT_GROUPING` ([conftest.py:140-143](../tests/evaluation/conftest.py#L140-L143)) — refinement is expensive and its quality does not depend on which grouping implementation produced the input, so it only runs once per dataset against the default implementation.
+
+Summary tests match predicted groups to expected groups first (`_matched_summaries`, [test_summary_eval.py:75-100](../tests/evaluation/test_summary_eval.py#L75-L100)): `match_groups` pairs groups by link overlap, then the expected group's title looks up the reference summary; groups without an expected summary are skipped with a warning.
 
 ## Deterministic Metrics #evaluation
 
@@ -40,20 +51,21 @@ Implemented in [tests/evaluation/metrics.py](../tests/evaluation/metrics.py) and
 
 - **`pairwise_prf`** ([metrics.py:6-21](../tests/evaluation/metrics.py#L6-L21)) — converts each group's link set into all link pairs (`_cluster_pairs`), then computes precision/recall/F1 over the pair sets: a pair of links placed together in both predicted and expected groupings counts as a true positive. Order- and title-insensitive; judges only which items are co-clustered.
 - **`rouge_l`** ([metrics.py:24-26](../tests/evaluation/metrics.py#L24-L26)) — ROUGE-L F-measure via `rouge-score` with stemming, reference vs candidate summary.
-- **`match_groups`** ([metrics.py:29-57](../tests/evaluation/metrics.py#L29-L57)) — greedy one-to-one matching between predicted and expected groups: all pairs with non-empty link intersection are scored by Jaccard similarity (`_jaccard`, [metrics.py:68-69](../tests/evaluation/metrics.py#L68-L69)) and assigned in descending score order.
+- **`match_groups`** ([metrics.py:29-57](../tests/evaluation/metrics.py#L29-L57)) — greedy one-to-one matching between predicted and expected groups: all pairs with non-empty link intersection are scored by Jaccard similarity (`_jaccard`, [metrics.py:77-78](../tests/evaluation/metrics.py#L77-L78)) and assigned in descending score order.
+- **`links`** ([metrics.py:60-67](../tests/evaluation/metrics.py#L60-L67)) — extracts and validates a group's link set as `set[str]`, raising `ValueError` if `links` is missing or not all strings; shared by both grouping and summary tests.
 
 ## LLM Judge #evaluation #llm
 
-Judge-based metrics use deepeval `GEval` with a `GPTModel` pointed at the same LiteLLM router as the pipeline ([conftest.py:74-81](../tests/evaluation/conftest.py#L74-L81)): model name from `EVAL_JUDGE_MODEL` (default `gpt-5-luna`, [src/news/settings.py:65](../src/news/settings.py#L65)), temperature 1.
+Judge-based metrics use deepeval `GEval` with a `GPTModel` pointed at the same LiteLLM router as the pipeline ([conftest.py:94-100](../tests/evaluation/conftest.py#L94-L100)): model name from `EVAL_JUDGE_MODEL` (default `gpt-5-luna`, [src/news/settings.py:65](../src/news/settings.py#L65)), temperature 1.
 
-Judge criteria ([test_digest_eval.py:48-64](../tests/evaluation/test_digest_eval.py#L48-L64), [test_digest_eval.py:172-185](../tests/evaluation/test_digest_eval.py#L172-L185)):
+Judge criteria ([test_grouping_eval.py:43-59](../tests/evaluation/test_grouping_eval.py#L43-L59), [test_summary_eval.py:103-116](../tests/evaluation/test_summary_eval.py#L103-L116)):
 
 - **Grouping correctness** — items about the same real-world event must be in one group, different events must not be merged; wording is not judged. Uses input, actual output, and expected output.
 - **Summary faithfulness** — the actual summary must faithfully cover the key facts of the expected summary without invented facts. Uses actual and expected output only.
 
 ## Frozen Datasets #evaluation
 
-Datasets live in [tests/evaluation/data/](../tests/evaluation/data/) and are discovered at collection time by the filename pattern `rss_entries_<id>.json` ([conftest.py:20-37](../tests/evaluation/conftest.py#L20-L37)); each discovered id parametrizes the whole suite via the `dataset_id` fixture ([conftest.py:48-50](../tests/evaluation/conftest.py#L48-L50)).
+Datasets live in [tests/evaluation/data/](../tests/evaluation/data/) and are discovered at collection time by the filename pattern `rss_entries_<id>.json` ([conftest.py:40-51](../tests/evaluation/conftest.py#L40-L51)); each discovered id parametrizes the whole suite via the `dataset_id` fixture ([conftest.py:62-64](../tests/evaluation/conftest.py#L62-L64)).
 
 | File | Contents |
 |---|---|
@@ -70,7 +82,7 @@ Currently available datasets:
 | `2026_07_22_Economy` | 1156 | 20 groups, 20 summaries |
 | `2026_07_22_news` | 1362 | none (summary tests skip) |
 
-Only `2026_07_22_Economy` has expected data, so grouping tests run for all four datasets while summary-dependent tests skip elsewhere via `_load_required_data` ([conftest.py:141-145](../tests/evaluation/conftest.py#L141-L145)).
+Only `2026_07_22_Economy` has expected data, so grouping tests run for all discovered datasets while summary-dependent tests skip elsewhere via `_load_required_data` ([conftest.py:169-173](../tests/evaluation/conftest.py#L169-L173)).
 
 ## Dataset Capture Utility #evaluation
 
@@ -78,18 +90,22 @@ Only `2026_07_22_Economy` has expected data, so grouping tests run for all four 
 
 ## Fixtures and Execution Model #evaluation
 
-Module-scoped fixtures in [tests/evaluation/conftest.py](../tests/evaluation/conftest.py) minimize LLM calls — one grouping run and one refinement run per dataset, shared by all four tests:
+**Package-scoped** fixtures in [tests/evaluation/conftest.py](../tests/evaluation/conftest.py) (`scope="package"`, async ones also `loop_scope="package"`) minimize LLM calls — one grouping run per `(dataset, grouping implementation)` pair and one refinement run per dataset, shared across both `test_grouping_eval.py` and `test_summary_eval.py`:
 
-- `eval_settings` — loads `Settings`; skips the suite when credentials are not configured ([conftest.py:40-45](../tests/evaluation/conftest.py#L40-L45))
-- `frozen_entries` — validates the dataset JSON into `RssEntry` objects ([conftest.py:53-61](../tests/evaluation/conftest.py#L53-L61))
-- `judge` — deepeval `GPTModel` over the LiteLLM router ([conftest.py:74-81](../tests/evaluation/conftest.py#L74-L81))
-- `grouping_run` — real `extract_groups` call on entries formatted with `grouping_content_max_chars`; returns the formatted prompt, the actual grouping JSON, and the `NewsRecord` list ([conftest.py:84-111](../tests/evaluation/conftest.py#L84-L111))
-- `refined_run` — real `refine_all` call over the grouping results, dated today ([conftest.py:114-134](../tests/evaluation/conftest.py#L114-L134))
+- `eval_settings` — loads `Settings`; skips the suite when credentials are not configured ([conftest.py:54-59](../tests/evaluation/conftest.py#L54-L59))
+- `dataset_id` — parametrized over every discovered dataset id ([conftest.py:62-64](../tests/evaluation/conftest.py#L62-L64))
+- `grouping_name` — parametrized over `GROUPING_IMPLEMENTATIONS`, sorted by name ([conftest.py:67-69](../tests/evaluation/conftest.py#L67-L69))
+- `frozen_entries` — validates the dataset JSON into `RssEntry` objects ([conftest.py:72-80](../tests/evaluation/conftest.py#L72-L80))
+- `judge` — deepeval `GPTModel` over the LiteLLM router ([conftest.py:93-100](../tests/evaluation/conftest.py#L93-L100))
+- `grouping_run` — builds the `grouping_name` implementation from the registry and calls it on entries formatted with `grouping_content_max_chars`; returns the formatted prompt, the actual grouping JSON, and the `NewsRecord` list ([conftest.py:103-130](../tests/evaluation/conftest.py#L103-L130))
+- `refined_run` — real `refine_all` call over the grouping results, dated today; skips unless `grouping_name == DEFAULT_GROUPING` so refinement cost does not multiply with the number of registered grouping implementations ([conftest.py:133-162](../tests/evaluation/conftest.py#L133-L162))
+
+Package scope (rather than module scope) lets `grouping_run` be shared between the two split test files without re-running the grouping call per file. Splitting `tests/` from `tests/evaluation/` still works without an `__init__.py` in either directory (verified: `uv run pytest tests/evaluation --collect-only -q` resolves the parametrized, package-scoped async fixtures cleanly).
 
 Behavior notes:
 
-- Grouping always uses the focus of the first configured aggregation (`aggregations[0].focus`) regardless of the dataset's category ([conftest.py:102-105](../tests/evaluation/conftest.py#L102-L105)).
-- Refinement in evaluation goes through the same `refine_record` path as production, including the `url_context` tool, so the judge scores summaries produced with live link reading ([src/news/digest/service.py:221-227](../src/news/digest/service.py#L221-L227)).
+- Grouping always uses the focus of the first configured aggregation (`aggregations[0].focus`) regardless of the dataset's category ([conftest.py:121-124](../tests/evaluation/conftest.py#L121-L124)).
+- Refinement in evaluation goes through the same `refine_record` path as production, including the `url_context` tool, so the judge scores summaries produced with live link reading ([src/news/digest/service.py:158-163](../src/news/digest/service.py#L158-L163)).
 - Runs are non-deterministic by nature (LLM output); thresholds are set to absorb run-to-run variance, and the pairwise/ROUGE metrics provide the deterministic regression signal.
 
 Related docs: [Tests & Coverage](tests_coverage.md) for the unit suites, [Configuration](config_environment.md) for `EVAL_JUDGE_MODEL` and credentials, [Dependencies](dependencies_libraries.md) for deepeval and rouge-score.

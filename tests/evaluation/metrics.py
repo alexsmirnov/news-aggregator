@@ -57,6 +57,15 @@ def match_groups(
     return matches
 
 
+def links(group: dict[str, object]) -> set[str]:
+    group_links = group.get("links")
+    if not isinstance(group_links, list) or not all(
+        isinstance(link, str) for link in group_links
+    ):
+        raise ValueError("expected group links must be a list of strings")
+    return set(group_links)
+
+
 def _cluster_pairs(groups: list[set[str]]) -> set[frozenset[str]]:
     return {
         frozenset(pair)

@@ -1,5 +1,6 @@
 import json
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -12,6 +13,7 @@ import pytest_asyncio
 from deepeval.models import GPTModel
 from pydantic import ValidationError
 
+from news.digest.grouping import Grouping, LlmGrouping, format_entries
 from news.digest.llm_client import LlmClient
 from news.digest.miniflux_client import MinifluxClient
 from news.digest.schemas import DigestRecord, NewsRecord, RssEntry
@@ -22,6 +24,17 @@ DATA_DIR = Path(__file__).parent / "data"
 
 _ENTRY_PREFIX = "rss_entries_"
 _ENTRY_SUFFIX = ".json"
+
+GROUPING_F1_MIN = 0.6
+ROUGE_L_MIN = 0.3
+JUDGE_MIN = 0.6
+
+GROUPING_IMPLEMENTATIONS: dict[
+    str, Callable[[Settings, LlmClient], Grouping]
+] = {
+    "llm": LlmGrouping,
+}
+DEFAULT_GROUPING = "llm"
 
 
 def _collect_dataset_ids() -> list[str]:
@@ -38,7 +51,7 @@ def _collect_dataset_ids() -> list[str]:
     return ids
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="package")
 def eval_settings() -> Settings:
     try:
         return Settings()  # type: ignore
@@ -46,12 +59,17 @@ def eval_settings() -> Settings:
         pytest.skip("evaluation credentials not configured")
 
 
-@pytest.fixture(scope="module", params=_collect_dataset_ids())
+@pytest.fixture(scope="package", params=_collect_dataset_ids())
 def dataset_id(request: pytest.FixtureRequest) -> str:
     return request.param
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="package", params=sorted(GROUPING_IMPLEMENTATIONS))
+def grouping_name(request: pytest.FixtureRequest) -> str:
+    return request.param
+
+
+@pytest.fixture(scope="package")
 def frozen_entries(dataset_id: str) -> list[RssEntry]:
     path = DATA_DIR / f"{_ENTRY_PREFIX}{dataset_id}{_ENTRY_SUFFIX}"
     if not path.exists():
@@ -62,17 +80,17 @@ def frozen_entries(dataset_id: str) -> list[RssEntry]:
     return [RssEntry.model_validate(entry) for entry in _load_json(path)]
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="package")
 def expected_groups(dataset_id: str) -> list[dict[str, object]]:
     return _load_required_data(f"expected_groups_{dataset_id}.json")
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="package")
 def expected_summaries(dataset_id: str) -> list[dict[str, object]]:
     return _load_required_data(f"expected_summaries_{dataset_id}.json")
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="package")
 def judge(eval_settings: Settings) -> GPTModel:
     return GPTModel(
         model=eval_settings.eval_judge_model,
@@ -82,12 +100,13 @@ def judge(eval_settings: Settings) -> GPTModel:
     )
 
 
-@pytest_asyncio.fixture(scope="module")
+@pytest_asyncio.fixture(scope="package", loop_scope="package")
 async def grouping_run(
     eval_settings: Settings,
     frozen_entries: list[RssEntry],
+    grouping_name: str,
 ) -> tuple[str, str, list[NewsRecord]]:
-    formatted = DigestService.format_entries(
+    formatted = format_entries(
         frozen_entries,
         content_max_chars=eval_settings.grouping_content_max_chars,
     )
@@ -97,14 +116,10 @@ async def grouping_run(
             base_url=str(eval_settings.litellm_router),
         )
     )
-    service = DigestService(
-        eval_settings,
-        cast(MinifluxClient, object()),
-        llm,
-    )
+    grouping = GROUPING_IMPLEMENTATIONS[grouping_name](eval_settings, llm)
     try:
-        records = await service.extract_groups(
-            formatted,
+        records = await grouping(
+            frozen_entries,
             focus=eval_settings.aggregations[0].focus,
         )
     finally:
@@ -115,12 +130,17 @@ async def grouping_run(
     return formatted, actual_json, records
 
 
-@pytest_asyncio.fixture(scope="module")
+@pytest_asyncio.fixture(scope="package", loop_scope="package")
 async def refined_run(
     eval_settings: Settings,
     frozen_entries: list[RssEntry],
     grouping_run: tuple[str, str, list[NewsRecord]],
+    grouping_name: str,
 ) -> list[DigestRecord]:
+    if grouping_name != DEFAULT_GROUPING:
+        pytest.skip(
+            f"summary evaluation only runs for grouping={DEFAULT_GROUPING!r}"
+        )
     _, _, records = grouping_run
     llm = LlmClient(
         openai.AsyncOpenAI(
@@ -132,6 +152,7 @@ async def refined_run(
         eval_settings,
         cast(MinifluxClient, object()),
         llm,
+        cast(Grouping, object()),
     )
     try:
         return await service.refine_all(

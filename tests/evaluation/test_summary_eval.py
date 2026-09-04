@@ -1,75 +1,15 @@
-import json
 import logging
 
 import pytest
-from deepeval import assert_test
 from deepeval.metrics import GEval
 from deepeval.models import GPTModel
 from deepeval.test_case import LLMTestCase, SingleTurnParams
-from metrics import match_groups, pairwise_prf, rouge_l
+from metrics import links, match_groups, rouge_l
 
+from conftest import JUDGE_MIN, ROUGE_L_MIN
 from news.digest.schemas import DigestRecord, NewsRecord
 
-GROUPING_F1_MIN = 0.6
-ROUGE_L_MIN = 0.3
-JUDGE_MIN = 0.6
 logger = logging.getLogger(__name__)
-
-
-@pytest.mark.integration
-def test_grouping_pairwise_f1(
-    grouping_run: tuple[str, str, list[NewsRecord]],
-    expected_groups: list[dict[str, object]],
-) -> None:
-    # Arrange
-    _, _, records = grouping_run
-
-    # Act
-    precision, recall, f1 = pairwise_prf(
-        [{str(link) for link in record.links} for record in records],
-        [_links(group) for group in expected_groups],
-    )
-
-    # Assert
-    assert f1 >= GROUPING_F1_MIN, (
-        f"grouping precision={precision:.3f}, recall={recall:.3f}, "
-        f"f1={f1:.3f}"
-    )
-
-
-@pytest.mark.integration
-def test_grouping_judge(
-    grouping_run: tuple[str, str, list[NewsRecord]],
-    expected_groups: list[dict[str, object]],
-    judge: GPTModel,
-) -> None:
-    # Arrange
-    formatted, actual_json, _ = grouping_run
-    metric = GEval(
-        name="Grouping correctness",
-        criteria=(
-            "Determine whether the news items in the actual output are "
-            "correctly grouped into trending events: items about the same "
-            "real-world event must be in one group, and items about "
-            "different events must not be merged. Judge only grouping "
-            "correctness, not wording."
-        ),
-        evaluation_params=[
-            SingleTurnParams.INPUT,
-            SingleTurnParams.ACTUAL_OUTPUT,
-            SingleTurnParams.EXPECTED_OUTPUT,
-        ],
-        model=judge,
-        threshold=JUDGE_MIN,
-    )
-    test_case = LLMTestCase(
-        input=formatted,
-        actual_output=actual_json,
-        expected_output=json.dumps(expected_groups, indent=2),
-    )
-
-    # Act / Assert
-    assert_test(test_case, [metric])
 
 
 @pytest.mark.integration
@@ -132,15 +72,6 @@ async def test_summary_judge_mean(
     assert mean >= JUDGE_MIN, f"judge mean={mean:.3f}, scores={scores}"
 
 
-def _links(group: dict[str, object]) -> set[str]:
-    links = group.get("links")
-    if not isinstance(links, list) or not all(
-        isinstance(link, str) for link in links
-    ):
-        raise ValueError("expected group links must be a list of strings")
-    return set(links)
-
-
 def _matched_summaries(
     records: list[NewsRecord],
     refined_records: list[DigestRecord],
@@ -149,7 +80,7 @@ def _matched_summaries(
 ) -> list[tuple[DigestRecord, str]]:
     pairs = match_groups(
         [{str(link) for link in record.links} for record in records],
-        [_links(group) for group in expected_groups],
+        [links(group) for group in expected_groups],
     )
     assert pairs, "no predicted groups overlap expected groups"
     summaries = {

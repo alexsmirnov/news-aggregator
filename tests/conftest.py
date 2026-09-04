@@ -1,13 +1,15 @@
 import re
+import types
 from collections.abc import Callable, Generator
 from datetime import date
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
 
 from news.digest.archive import digest_path
-from news.digest.schemas import Digest
+from news.digest.schemas import Digest, RssEntry
 from news.pages import get_settings
 from news.server import app
 from news.settings import Settings
@@ -56,3 +58,106 @@ def seed_digest(tmp_path: Path) -> SeedDigest:
         return path
 
     return _seed
+
+
+class FakeMiniflux:
+    def __init__(
+        self,
+        entries: list[RssEntry] | None = None,
+        category_error: Exception | None = None,
+        entries_error: Exception | None = None,
+    ) -> None:
+        self.entries = entries if entries is not None else []
+        self.category_error = category_error
+        self.entries_error = entries_error
+        self.calls: list[dict[str, Any]] = []
+
+    async def get_entries(
+        self, category_name: str, **kwargs: Any
+    ) -> list[RssEntry]:
+        self.calls.append({"category_name": category_name, **kwargs})
+        if self.category_error is not None:
+            raise self.category_error
+        if self.entries_error is not None:
+            raise self.entries_error
+        return self.entries
+
+
+class FakeLlm:
+    def __init__(
+        self,
+        chat_results: list[Any] | None = None,
+        chat_parsed_results: list[Any] | None = None,
+    ) -> None:
+        self.chat_results = list(chat_results or [])
+        self.chat_parsed_results = list(chat_parsed_results or [])
+        self.chat_calls: list[tuple[Any, ...]] = []
+        self.chat_parsed_calls: list[tuple[Any, ...]] = []
+
+    async def chat(
+        self, model: str, messages: list[dict[str, Any]], **kwargs: Any
+    ) -> Any:
+        self.chat_calls.append((model, messages, kwargs))
+        result = self.chat_results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    async def chat_parsed(
+        self,
+        model: str,
+        messages: list[dict[str, Any]],
+        response_format: Any,
+        **kwargs: Any,
+    ) -> Any:
+        self.chat_parsed_calls.append(
+            (model, messages, response_format, kwargs)
+        )
+        result = self.chat_parsed_results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+@pytest.fixture
+def entry() -> RssEntry:
+    return RssEntry(
+        id=42,
+        title="T",
+        content="C",
+        link="http://a",
+        published_at="2026-07-16T10:00:00",
+        source="F",
+    )
+
+
+@pytest.fixture
+def fake_miniflux() -> type[FakeMiniflux]:
+    return FakeMiniflux
+
+
+@pytest.fixture
+def fake_llm() -> type[FakeLlm]:
+    return FakeLlm
+
+
+@pytest.fixture
+def settings_stub(tmp_path: Path) -> Settings:
+    return cast(
+        Settings,
+        types.SimpleNamespace(
+            miniflux_api_base="http://m.test",
+            miniflux_api_key="k",
+            litellm_api_key="l",
+            litellm_router="http://r.test",
+            digest_output_dir=tmp_path,
+            fetch_lookback_hours=24,
+            fetch_limit=10000,
+            entry_content_max_chars=1000,
+            grouping_content_max_chars=300,
+            refine_max_links=10,
+            model_trending="sonar-reasoning-pro",
+            model_grouping="gemini-flash",
+            model_refinement="gemini-flash",
+        ),
+    )
