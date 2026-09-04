@@ -26,6 +26,8 @@ All configuration is defined in `Settings` (pydantic-settings `BaseSettings`, lo
 | `MODEL_GROUPING` #env | str | `gpt-5-terra` | Model for news grouping ([settings.py:63](../src/news/settings.py#L63)) |
 | `MODEL_REFINEMENT` #env | str | `gemini-flash` | Model for summary refinement ([settings.py:64](../src/news/settings.py#L64)) |
 | `EVAL_JUDGE_MODEL` #env | str | `gpt-5-luna` | LLM judge model used by the evaluation test suite ([settings.py:65](../src/news/settings.py#L65)) |
+| `MODEL_EMBEDDING` #env | str | `bge-embed` | Model for the map-reduce grouping design's embedding step (not yet wired into the pipeline) ([settings.py:67](../src/news/settings.py#L67)) |
+| `EMBEDDING_DIMENSIONS` #env | int | `1024` | Embedding vector dimensionality requested from the embedding model ([settings.py:68](../src/news/settings.py#L68)) |
 | `RETRY_ATTEMPTS` #env | int | `3` | Declared retry attempt count ([settings.py:66](../src/news/settings.py#L66)) |
 | `RETRY_MIN_WAIT_S` #env | int | `2` | Declared minimum retry wait ([settings.py:67](../src/news/settings.py#L67)) |
 | `RETRY_MAX_WAIT_S` #env | int | `30` | Declared maximum retry wait ([settings.py:68](../src/news/settings.py#L68)) |

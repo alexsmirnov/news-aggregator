@@ -88,11 +88,14 @@ class FakeLlm:
         self,
         chat_results: list[Any] | None = None,
         chat_parsed_results: list[Any] | None = None,
+        embeddings_results: list[Any] | None = None,
     ) -> None:
         self.chat_results = list(chat_results or [])
         self.chat_parsed_results = list(chat_parsed_results or [])
+        self.embeddings_results = list(embeddings_results or [])
         self.chat_calls: list[tuple[Any, ...]] = []
         self.chat_parsed_calls: list[tuple[Any, ...]] = []
+        self.embeddings_calls: list[tuple[Any, ...]] = []
 
     async def chat(
         self, model: str, messages: list[dict[str, Any]], **kwargs: Any
@@ -114,6 +117,15 @@ class FakeLlm:
             (model, messages, response_format, kwargs)
         )
         result = self.chat_parsed_results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    async def embeddings(
+        self, model: str, inputs: list[str], **kwargs: Any
+    ) -> Any:
+        self.embeddings_calls.append((model, inputs, kwargs))
+        result = self.embeddings_results.pop(0)
         if isinstance(result, Exception):
             raise result
         return result
@@ -159,5 +171,7 @@ def settings_stub(tmp_path: Path) -> Settings:
             model_trending="sonar-reasoning-pro",
             model_grouping="gemini-flash",
             model_refinement="gemini-flash",
+            model_embedding="bge-embed",
+            embedding_dimensions=1024,
         ),
     )

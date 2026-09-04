@@ -17,7 +17,8 @@ def fake_openai() -> types.SimpleNamespace:
             completions=types.SimpleNamespace(
                 create=AsyncMock(), parse=AsyncMock()
             )
-        )
+        ),
+        embeddings=types.SimpleNamespace(create=AsyncMock()),
     )
 
 
@@ -31,9 +32,20 @@ def make_response(content: str | None) -> types.SimpleNamespace:
     )
 
 
+def make_embeddings_response(
+    indexed_vectors: list[tuple[int, list[float]]],
+) -> types.SimpleNamespace:
+    return types.SimpleNamespace(
+        data=[
+            types.SimpleNamespace(index=index, embedding=vector)
+            for index, vector in indexed_vectors
+        ]
+    )
+
+
 @pytest.fixture
 def make_client(fake_openai: types.SimpleNamespace) -> LlmClient:
-    return LlmClient(fake_openai, attempts=3, max_wait=0)
+    return LlmClient(fake_openai, attempts=3, min_wait=0, max_wait=0)
 
 
 @pytest.fixture
@@ -93,6 +105,43 @@ async def test_chat_parsed_returns_parsed_model(fake_openai, make_client):
     fake_openai.chat.completions.parse.assert_awaited_once_with(
         model="gemini-flash", messages=[], response_format=NewsResponse
     )
+
+
+async def test_embeddings_returns_vectors_ordered_by_index(
+    fake_openai, make_client
+):
+    # Arrange
+    fake_openai.embeddings.create.return_value = make_embeddings_response(
+        [(1, [0.2, 0.2]), (0, [0.1, 0.1])]
+    )
+
+    # Act
+    vectors = await make_client.embeddings(
+        model="bge-embed", inputs=["a", "b"], dimensions=1024
+    )
+
+    # Assert
+    assert vectors == [[0.1, 0.1], [0.2, 0.2]]
+    fake_openai.embeddings.create.assert_awaited_once_with(
+        model="bge-embed", input=["a", "b"], dimensions=1024
+    )
+
+
+async def test_embeddings_retries_transient_error_then_succeeds(
+    fake_openai, make_client, rate_limit_error
+):
+    # Arrange
+    fake_openai.embeddings.create.side_effect = [
+        rate_limit_error,
+        make_embeddings_response([(0, [0.1])]),
+    ]
+
+    # Act
+    vectors = await make_client.embeddings(model="bge-embed", inputs=["a"])
+
+    # Assert
+    assert vectors == [[0.1]]
+    assert fake_openai.embeddings.create.await_count == 2
 
 
 async def test_chat_retries_transient_error_then_succeeds(

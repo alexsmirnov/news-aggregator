@@ -65,6 +65,8 @@ class Settings(BaseSettings):
     model_trending: str = "sonar-reasoning-pro"
     model_grouping: str = "gpt-5-terra"
     model_refinement: str = "gemini-flash"
+    model_embedding: str = "bge-embed"
+    embedding_dimensions: int = 1024
     eval_judge_model: str = "gpt-5-terra"
     retry_attempts: int = 3
     retry_min_wait_s: int = 2

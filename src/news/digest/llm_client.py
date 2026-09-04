@@ -1,5 +1,5 @@
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any, TypeVar, cast
 
@@ -17,6 +17,7 @@ from tenacity import (
 from news.settings import Settings
 
 T = TypeVar("T", bound=BaseModel)
+R = TypeVar("R")
 
 logger = logging.getLogger(__name__)
 
@@ -50,34 +51,48 @@ class LlmClient:
     async def aclose(self) -> None:
         await self.client.close()
 
+    async def _with_retry(
+        self,
+        call: Callable[[], Awaitable[R]],
+        *,
+        retry_message: str,
+        error_message: str,
+        log_args: tuple[Any, ...],
+    ) -> R:
+        attempt = 0
+
+        async def _do() -> R:
+            nonlocal attempt
+            attempt += 1
+            if attempt > 1:
+                logger.warning(retry_message, attempt, *log_args)
+            try:
+                return await call()
+            except Exception:
+                logger.error(
+                    error_message, attempt, *log_args, exc_info=True
+                )
+                raise
+
+        return await self._retrying(_do)
+
     async def chat(
         self, model: str, messages: list[dict[str, Any]], **kwargs: Any
     ) -> str | None:
         sdk_messages = cast(list[ChatCompletionMessageParam], messages)
-        attempt = 0
 
-        async def _do() -> str | None:
-            nonlocal attempt
-            attempt += 1
-            if attempt > 1:
-                logger.warning(
-                    "llm chat retry attempt=%s model=%s", attempt, model
-                )
-            try:
-                response = await self.client.chat.completions.create(
-                    model=model, messages=sdk_messages, **kwargs
-                )
-            except Exception:
-                logger.error(
-                    "llm chat failed attempt=%s model=%s",
-                    attempt,
-                    model,
-                    exc_info=True,
-                )
-                raise
+        async def _call() -> str | None:
+            response = await self.client.chat.completions.create(
+                model=model, messages=sdk_messages, **kwargs
+            )
             return response.choices[0].message.content
 
-        return await self._retrying(_do)
+        return await self._with_retry(
+            _call,
+            retry_message="llm chat retry attempt=%s model=%s",
+            error_message="llm chat failed attempt=%s model=%s",
+            log_args=(model,),
+        )
 
     async def chat_parsed(
         self,
@@ -87,37 +102,49 @@ class LlmClient:
         **kwargs: Any,
     ) -> T | None:
         sdk_messages = cast(list[ChatCompletionMessageParam], messages)
-        attempt = 0
 
-        async def _do() -> T | None:
-            nonlocal attempt
-            attempt += 1
-            if attempt > 1:
-                logger.warning(
-                    "llm parsed retry attempt=%s model=%s response_format=%s",
-                    attempt,
-                    model,
-                    response_format.__name__,
-                )
-            try:
-                response = await self.client.chat.completions.parse(
-                    model=model,
-                    messages=sdk_messages,
-                    response_format=response_format,
-                    **kwargs,
-                )
-            except Exception:
-                logger.error(
-                    "llm parsed failed attempt=%s model=%s response_format=%s",
-                    attempt,
-                    model,
-                    response_format.__name__,
-                    exc_info=True,
-                )
-                raise
+        async def _call() -> T | None:
+            response = await self.client.chat.completions.parse(
+                model=model,
+                messages=sdk_messages,
+                response_format=response_format,
+                **kwargs,
+            )
             return response.choices[0].message.parsed
 
-        return await self._retrying(_do)
+        return await self._with_retry(
+            _call,
+            retry_message=(
+                "llm parsed retry attempt=%s model=%s response_format=%s"
+            ),
+            error_message=(
+                "llm parsed failed attempt=%s model=%s response_format=%s"
+            ),
+            log_args=(model, response_format.__name__),
+        )
+
+    async def embeddings(
+        self, model: str, inputs: list[str], **kwargs: Any
+    ) -> list[list[float]]:
+        async def _call() -> list[list[float]]:
+            response = await self.client.embeddings.create(
+                model=model, input=inputs, **kwargs
+            )
+            # ponytail: the API does not guarantee response order, so
+            # callers can only zip vectors back to inputs by index.
+            return [
+                item.embedding
+                for item in sorted(
+                    response.data, key=lambda item: item.index
+                )
+            ]
+
+        return await self._with_retry(
+            _call,
+            retry_message="llm embeddings retry attempt=%s model=%s",
+            error_message="llm embeddings failed attempt=%s model=%s",
+            log_args=(model,),
+        )
 
 
 @asynccontextmanager
