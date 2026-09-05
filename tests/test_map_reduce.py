@@ -1,6 +1,7 @@
 import math
 from typing import cast
 
+import numpy as np
 import pytest
 from tests.conftest import FakeLlm
 
@@ -12,6 +13,11 @@ from news.digest.map_reduce import (
 )
 from news.digest.schemas import RssEntry
 from news.settings import Settings
+
+
+def unit_vector(degrees: float) -> list[float]:
+    radians = math.radians(degrees)
+    return [math.cos(radians), math.sin(radians)]
 
 
 def make_entry(
@@ -178,3 +184,166 @@ async def test_call_raises_not_implemented(
     # Act / Assert
     with pytest.raises(NotImplementedError):
         await grouping([make_entry(1)], focus="FOCUS")
+
+
+def test_calibrate_threshold_identical_corpus_is_zero() -> None:
+    # Arrange
+    embeddings = np.tile(np.asarray(unit_vector(30.0)), (10, 1))
+
+    # Act
+    threshold = MapReduceGrouping.calibrate_threshold(embeddings)
+
+    # Assert
+    assert threshold == 0.0
+
+
+def test_calibrate_threshold_orthogonal_corpus_is_one() -> None:
+    # Arrange
+    embeddings = np.asarray([unit_vector(0.0), unit_vector(90.0)])
+
+    # Act
+    threshold = MapReduceGrouping.calibrate_threshold(embeddings)
+
+    # Assert: cos(90 degrees) via math.radians is not exactly 0.0.
+    assert threshold == pytest.approx(1.0)
+
+
+def test_calibrate_threshold_larger_k_sigma_tightens_threshold() -> None:
+    # Arrange: opposing vectors give a wide, unclamped similarity range.
+    embeddings = np.asarray(
+        [unit_vector(0.0), unit_vector(90.0), unit_vector(180.0)]
+    )
+
+    # Act
+    loose = MapReduceGrouping.calibrate_threshold(embeddings, k_sigma=2.0)
+    tight = MapReduceGrouping.calibrate_threshold(embeddings, k_sigma=4.0)
+
+    # Assert
+    assert tight < loose
+
+
+def test_calibrate_threshold_clamps_at_zero() -> None:
+    # Arrange
+    embeddings = np.asarray(
+        [unit_vector(0.0), unit_vector(45.0), unit_vector(90.0)]
+    )
+
+    # Act
+    threshold = MapReduceGrouping.calibrate_threshold(
+        embeddings, k_sigma=100.0
+    )
+
+    # Assert
+    assert threshold == 0.0
+
+
+def test_calibrate_threshold_single_embedding_is_zero_not_nan() -> None:
+    # Arrange
+    embeddings = np.asarray([unit_vector(0.0)])
+
+    # Act
+    threshold = MapReduceGrouping.calibrate_threshold(embeddings)
+
+    # Assert
+    assert threshold == 0.0
+
+
+def test_cluster_separates_two_tight_blobs() -> None:
+    # Arrange
+    embeddings = np.asarray(
+        [
+            unit_vector(0.0),
+            unit_vector(1.0),
+            unit_vector(2.0),
+            unit_vector(90.0),
+            unit_vector(91.0),
+            unit_vector(92.0),
+        ]
+    )
+
+    # Act
+    labels = MapReduceGrouping.cluster(embeddings, distance_threshold=0.1)
+
+    # Assert
+    assert labels[0] == labels[1] == labels[2]
+    assert labels[3] == labels[4] == labels[5]
+    assert labels[0] != labels[3]
+
+
+def test_cluster_keeps_singletons_without_noise_label() -> None:
+    # Arrange
+    embeddings = np.asarray(
+        [unit_vector(0.0), unit_vector(1.0), unit_vector(180.0)]
+    )
+
+    # Act
+    labels = MapReduceGrouping.cluster(embeddings, distance_threshold=0.05)
+
+    # Assert
+    assert len(labels) == 3
+    assert all(label >= 0 for label in labels)
+    assert labels[2] not in (labels[0], labels[1])
+
+
+def test_cluster_average_linkage_resists_chaining() -> None:
+    # Arrange: pairwise cosine distances are ~0.234, 0.234, 0.826 — a
+    # single-linkage / connected-components cut at 0.35 would chain all
+    # three together via the middle point.
+    embeddings = np.asarray(
+        [unit_vector(0.0), unit_vector(40.0), unit_vector(80.0)]
+    )
+
+    # Act
+    labels = MapReduceGrouping.cluster(embeddings, distance_threshold=0.35)
+
+    # Assert
+    assert labels[0] != labels[2]
+
+
+def test_cluster_single_entry_is_its_own_label() -> None:
+    # Arrange
+    embeddings = np.asarray([unit_vector(0.0)])
+
+    # Act
+    labels = MapReduceGrouping.cluster(embeddings, distance_threshold=0.5)
+
+    # Assert
+    assert list(labels) == [0]
+
+
+def test_cluster_empty_input_is_empty_output() -> None:
+    # Arrange
+    embeddings = np.zeros((0, 2))
+
+    # Act
+    labels = MapReduceGrouping.cluster(embeddings, distance_threshold=0.5)
+
+    # Assert
+    assert len(labels) == 0
+
+
+def test_calibrate_and_cluster_recover_synthetic_blobs() -> None:
+    # Arrange: three tight, well-separated blobs. The default k_sigma=3.0
+    # clamps to 0.0 on this small synthetic corpus (over-tight); k_sigma
+    # is exactly the constant the note says must be tuned per corpus, so
+    # a working value is recorded here rather than in production code.
+    rng = np.random.default_rng(1)
+    centers = [unit_vector(0.0), unit_vector(120.0), unit_vector(240.0)]
+    blobs = [
+        center + rng.normal(scale=0.01, size=2) for center in centers
+        for _ in range(5)
+    ]
+    embeddings = np.asarray(blobs)
+    embeddings /= np.linalg.norm(embeddings, axis=1, keepdims=True)
+
+    # Act
+    threshold = MapReduceGrouping.calibrate_threshold(
+        embeddings, k_sigma=1.5, seed=1
+    )
+    labels = MapReduceGrouping.cluster(embeddings, threshold)
+
+    # Assert: each blob's 5 members share a label, and the three blobs
+    # are not merged into one.
+    blob_labels = [set(labels[i : i + 5]) for i in range(0, 15, 5)]
+    assert all(len(labels_set) == 1 for labels_set in blob_labels)
+    assert len({next(iter(s)) for s in blob_labels}) == 3

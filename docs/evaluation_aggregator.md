@@ -45,6 +45,10 @@ The suite is split into two files, both marked `@pytest.mark.integration` (real 
 
 Summary tests match predicted groups to expected groups first (`_matched_summaries`, [test_summary_eval.py:75-100](../tests/evaluation/test_summary_eval.py#L75-L100)): `match_groups` pairs groups by link overlap, then the expected group's title looks up the reference summary; groups without an expected summary are skipped with a warning.
 
+## Manual Cluster Inspection #evaluation
+
+[test_cluster_eval.py](../tests/evaluation/test_cluster_eval.py) is not threshold-gated; it exists to produce a human-readable artifact rather than an assertion. `test_cluster_eval_writes_inspectable_yaml`, parametrized over every discovered `dataset_id` (no `grouping_name` axis — `MapReduceGrouping` is not in `GROUPING_IMPLEMENTATIONS`), embeds `frozen_entries` via `MapReduceGrouping.embed_entries`, clusters the title vectors with `calibrate_threshold` + `cluster`, and writes one YAML file per dataset to `<tempdir>/cluster_eval_<dataset_id>.yaml`: a list of clusters, each `{entries: [{title, link}, ...]}`, largest cluster first. The only assertion is that clustering produced at least one group; the path is logged (`log_cli_level = "INFO"`) so a run's output can be opened and read by hand.
+
 ## Deterministic Metrics #evaluation
 
 Implemented in [tests/evaluation/metrics.py](../tests/evaluation/metrics.py) and unit-tested in [tests/evaluation/test_metrics.py](../tests/evaluation/test_metrics.py):

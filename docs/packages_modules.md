@@ -37,7 +37,7 @@ Digest pipeline sub-package: fetches RSS entries from Miniflux, groups and refin
 | `archive.py` | Read-only archive reader: digest path layout, available dates, digest loading, link sanitization, `build_page` view-model builder ([src/news/digest/archive.py:27-152](../src/news/digest/archive.py#L27-L152)) |
 | `schemas.py` | Pydantic models: `RssEntry`, `NewsRecord`, `NewsResponse`, `DigestRecord`, `Digest`, `NavLink`, `RecordView`, `DigestPage` ([src/news/digest/schemas.py:6-54](../src/news/digest/schemas.py#L6-L54)) |
 | `prompts.py` | LLM prompt builders: trending query, grouping system/user prompts, refinement system/user prompts ([src/news/digest/prompts.py](../src/news/digest/prompts.py)) |
-| `map_reduce.py` | `MapReduceGrouping`: embeds entry titles and content separately in token-capped, concurrency-limited batches (`embed_entries`); `__call__` raises `NotImplementedError` until clustering, scoring, and map/reduce are added ([src/news/digest/map_reduce.py](../src/news/digest/map_reduce.py)) |
+| `map_reduce.py` | `MapReduceGrouping`: embeds entry titles and content separately in token-capped, concurrency-limited batches (`embed_entries`); `calibrate_threshold` samples a cosine-distance cutoff from the corpus's random-pair similarity baseline, `cluster` runs average-linkage `AgglomerativeClustering` with no noise class; `__call__` raises `NotImplementedError` until scoring and map/reduce are added ([src/news/digest/map_reduce.py](../src/news/digest/map_reduce.py)) |
 
 - **Uses:** `news` (settings)
 - **Used by:** `news` (server, scheduler, pages)

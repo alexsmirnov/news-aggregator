@@ -56,6 +56,16 @@ Exponential-backoff retries for LLM calls and transient Miniflux HTTP errors.
 Docs: https://tenacity.readthedocs.io/
 Used in: [src/news/digest/llm_client.py:9-15](../src/news/digest/llm_client.py#L9-L15), [src/news/digest/miniflux_client.py:7-13](../src/news/digest/miniflux_client.py#L7-L13)
 
+### numpy `>=2.5.1`
+Vector math for the map-reduce grouping design: similarity sampling in threshold calibration.
+Docs: https://numpy.org/doc/
+Used in: [src/news/digest/map_reduce.py](../src/news/digest/map_reduce.py)
+
+### scikit-learn `>=1.9.0`
+`AgglomerativeClustering` for average-linkage event clustering in the map-reduce grouping design.
+Docs: https://scikit-learn.org/stable/
+Used in: [src/news/digest/map_reduce.py](../src/news/digest/map_reduce.py)
+
 ## Development #dependencies
 
 ### pytest `>=9.0.1`
@@ -77,6 +87,11 @@ Configured in: [pyproject.toml:69-92](../pyproject.toml#L69-L92)
 Static type checker over `src` and `tests`.
 Docs: https://microsoft.github.io/pyright/
 Configured in: [pyproject.toml:94-99](../pyproject.toml#L94-L99)
+
+### pyyaml `>=6.0.3`
+YAML serialization for the manual cluster-inspection eval output.
+Docs: https://pyyaml.org/wiki/PyYAMLDocumentation
+Used in: [tests/evaluation/test_cluster_eval.py](../tests/evaluation/test_cluster_eval.py)
 
 ### deepeval `>=4.1`
 LLM evaluation framework: GEval metrics and GPT judge model for the evaluation suite.
