@@ -144,13 +144,20 @@ async def test_get_entries_resolves_category_and_returns_entries(make_client):
     assert entries[0].source == "F"
 
 
-def _entry_json(entry_id: int) -> dict:
+def _entry_json(
+    entry_id: int,
+    *,
+    url: str | None = None,
+    title: str = "T",
+    content: str = "<p>c</p>",
+    published_at: str = "2026-07-16",
+) -> dict:
     return {
         "id": entry_id,
-        "title": "T",
-        "url": "http://x",
-        "content": "<p>c</p>",
-        "published_at": "2026-07-16",
+        "title": title,
+        "url": url if url is not None else f"http://x/{entry_id}",
+        "content": content,
+        "published_at": published_at,
         "feed": {"title": "F"},
     }
 
@@ -219,6 +226,154 @@ async def test_get_entries_stops_when_page_shorter_than_requested(make_client):
     # Assert: loop stops after short page, no third entries request made
     assert len(calls) == 3
     assert [e.id for e in entries] == [1, 2, 3]
+
+
+def _at(entry_id: int, url: str, hour: int) -> dict:
+    return _entry_json(
+        entry_id, url=url, published_at=f"2026-07-16T{hour:02d}:00:00Z"
+    )
+
+
+def _duplicate_page() -> list[dict]:
+    # same url captured three times, out of chronological order
+    return [
+        _entry_json(
+            1,
+            url="http://x/a",
+            title="first",
+            content="oldest",
+            published_at="2026-07-16T01:00:00Z",
+        ),
+        _entry_json(
+            2,
+            url="http://x/a",
+            title="third",
+            content="newest",
+            published_at="2026-07-16T03:00:00Z",
+        ),
+        _entry_json(
+            3,
+            url="http://x/a",
+            title="second",
+            content="middle",
+            published_at="2026-07-16T02:00:00Z",
+        ),
+        _at(4, "http://x/b", 4),
+    ]
+
+
+async def _fetch(client: MinifluxClient, limit: int = 10) -> list[RssEntry]:
+    return await client.get_entries(
+        "news",
+        published_after=1752700000,
+        published_before=1752800000,
+        order="published_at",
+        limit=limit,
+    )
+
+
+def _entries_handler(
+    pages: list[list[dict]],
+) -> tuple[Callable[[httpx.Request], httpx.Response], list[httpx.Request]]:
+    return _sequence_handler(
+        [
+            httpx.Response(200, json=[{"id": 7, "title": "news"}]),
+            *(
+                httpx.Response(200, json={"total": len(page), "entries": page})
+                for page in pages
+            ),
+        ]
+    )
+
+
+async def test_get_entries_collapses_duplicate_links(make_client):
+    # Arrange
+    handler, _ = _entries_handler([_duplicate_page()])
+    client = make_client(handler)
+
+    # Act
+    entries = await _fetch(client)
+
+    # Assert
+    assert [entry.link for entry in entries] == ["http://x/a", "http://x/b"]
+
+
+async def test_get_entries_keeps_latest_content_and_earliest_published_at(
+    make_client,
+):
+    # Arrange
+    handler, _ = _entries_handler([_duplicate_page()])
+    client = make_client(handler)
+
+    # Act
+    entries = await _fetch(client)
+
+    # Assert: newest capture carries the content, oldest carries the time
+    merged = entries[0]
+    assert merged.id == 2
+    assert merged.title == "third"
+    assert merged.content == "newest"
+    assert merged.published_at == "2026-07-16T01:00:00Z"
+
+
+async def test_get_entries_collapses_duplicates_across_pages(make_client):
+    # Arrange: max_page_limit=2, limit=4 -> two full pages, no third request
+    handler, calls = _entries_handler(
+        [
+            [_at(1, "http://x/a", 1), _at(2, "http://x/a", 2)],
+            [_at(3, "http://x/a", 3), _at(4, "http://x/b", 4)],
+        ]
+    )
+    client = make_client(handler, max_page_limit=2)
+
+    # Act
+    entries = await _fetch(client, limit=4)
+
+    # Assert: dedup runs after pagination, it does not refill the limit
+    assert len(calls) == 3
+    assert [entry.id for entry in entries] == [3, 4]
+    assert entries[0].published_at == "2026-07-16T01:00:00Z"
+
+
+async def test_get_entries_preserves_first_occurrence_order(make_client):
+    # Arrange
+    handler, _ = _entries_handler(
+        [
+            [
+                _at(1, "http://x/a", 1),
+                _at(2, "http://x/b", 2),
+                _at(3, "http://x/a", 3),
+                _at(4, "http://x/c", 4),
+            ]
+        ]
+    )
+    client = make_client(handler)
+
+    # Act
+    entries = await _fetch(client)
+
+    # Assert
+    assert [entry.link for entry in entries] == [
+        "http://x/a",
+        "http://x/b",
+        "http://x/c",
+    ]
+
+
+async def test_get_entries_collapses_links_differing_by_trailing_slash(
+    make_client,
+):
+    # Arrange
+    handler, _ = _entries_handler(
+        [[_at(1, "http://x/a", 1), _at(2, "http://x/a/", 2)]]
+    )
+    client = make_client(handler)
+
+    # Act
+    entries = await _fetch(client)
+
+    # Assert
+    assert len(entries) == 1
 
 
 async def test_get_entries_raises_on_invalid_entry(make_client):

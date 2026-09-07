@@ -1,4 +1,5 @@
 import logging
+from collections import defaultdict
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -23,6 +24,38 @@ def is_transient_http_error(exc: BaseException) -> bool:
         status = exc.response.status_code
         return status == 429 or status >= 500
     return isinstance(exc, httpx.RequestError)
+
+
+def merge_duplicate_entries(entries: list[RssEntry]) -> list[RssEntry]:
+    """Collapse repeated captures of one page into a single entry.
+
+    Miniflux re-captures an article when its page is updated, emitting a new
+    id and published_at for the same url. The update carries the most accurate
+    text, the first capture carries the real publication time, so the survivor
+    is the newest capture stamped with the oldest published_at.
+    """
+    captures: dict[str, list[RssEntry]] = defaultdict(list)
+    for entry in entries:
+        # ponytail: mirrors DigestService._normalize_link (service.py), which
+        # keys the downstream lookup; not imported, that would invert layering.
+        captures[entry.link.rstrip("/")].append(entry)
+    return [_collapse_captures(group) for group in captures.values()]
+
+
+def _collapse_captures(captures: list[RssEntry]) -> RssEntry:
+    """Keep the newest capture, stamped with the earliest capture time.
+
+    Newest and earliest are picked from the whole group instead of being
+    folded together capture by capture: a running stamp would overwrite the
+    published_at that the remaining comparisons are made against.
+    """
+    # ponytail: miniflux serializes published_at as RFC3339 UTC ("...Z"), so
+    # string order is time order. Parse ISO if non-UTC offsets ever appear.
+    newest = max(captures, key=lambda capture: capture.published_at)
+    earliest = min(capture.published_at for capture in captures)
+    if newest.published_at == earliest:
+        return newest
+    return newest.model_copy(update={"published_at": earliest})
 
 
 class MinifluxClient:
@@ -122,6 +155,18 @@ class MinifluxClient:
             if len(page) < page_limit:
                 break
             offset += page_limit
+
+        # limit is an upper bound: dedup runs once paging stopped, extra pages
+        # are not fetched to refill what duplicates removed.
+        deduplicated = merge_duplicate_entries(entries)
+        if len(deduplicated) < len(entries):
+            logger.info(
+                "collapsed duplicate entries category=%s before=%s after=%s",
+                category_name,
+                len(entries),
+                len(deduplicated),
+            )
+        entries = deduplicated
 
         if not entries:
             logger.warning(

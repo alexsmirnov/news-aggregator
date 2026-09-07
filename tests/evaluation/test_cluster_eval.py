@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 async def test_cluster_eval_writes_inspectable_yaml(
     eval_settings: Settings,
     frozen_entries: list[RssEntry],
+    expected_groups: list[dict[str, object]],
     dataset_id: str,
 ) -> None:
     # Arrange
@@ -35,14 +36,15 @@ async def test_cluster_eval_writes_inspectable_yaml(
         embedded = await grouping.embed_entries(frozen_entries)
     finally:
         await llm.aclose()
-    title_vectors = np.asarray(
-        [entry.title_vector for entry in embedded], dtype=np.float64
+    vectors = np.asarray(
+        [entry.content_vector for entry in embedded], dtype=np.float64
     )
-    threshold = MapReduceGrouping.calibrate_threshold(title_vectors)
-    labels = MapReduceGrouping.cluster(title_vectors, threshold)
-    clusters = _clusters_by_size(embedded, labels)
+    for sigma in [2.7,2.8,2.9,3.0,3.1,3.2]:
+        threshold = MapReduceGrouping.calibrate_threshold(vectors, n_pairs=10000, k_sigma=sigma)
+        labels = MapReduceGrouping.cluster(vectors, threshold)
+        clusters = _clusters_by_size(embedded, labels)
 
-    output_path = Path(gettempdir()) / f"cluster_eval_{dataset_id}.yaml"
+    output_path = Path(__file__).parent.parent.parent / "tmp" / f"cluster_eval_{dataset_id}.yaml"
     output_path.write_text(yaml.safe_dump(clusters, sort_keys=False))
     logger.info(
         "cluster eval written path=%s clusters_count=%s threshold=%.4f",
