@@ -21,15 +21,18 @@ def unit_vector(degrees: float) -> list[float]:
 
 
 def make_entry(
-    entry_id: int, *, title: str = "T", content: str = "C"
+    entry_id: int, *, title: str = "T", content: str = "C",
+    link: str | None = None,
+    published_at: str = "2026-07-16T10:00:00",
+    source: str = "F",
 ) -> RssEntry:
     return RssEntry(
         id=entry_id,
         title=title,
         content=content,
-        link=f"http://a/{entry_id}",
-        published_at="2026-07-16T10:00:00",
-        source="F",
+        link=link if link is not None else f"http://a/{entry_id}",
+        published_at=published_at,
+        source=source,
     )
 
 
@@ -347,3 +350,211 @@ def test_calibrate_and_cluster_recover_synthetic_blobs() -> None:
     blob_labels = [set(labels[i : i + 5]) for i in range(0, 15, 5)]
     assert all(len(labels_set) == 1 for labels_set in blob_labels)
     assert len({next(iter(s)) for s in blob_labels}) == 3
+
+
+def test_scoring_singleton_has_positive_score() -> None:
+    # Arrange
+    records = [make_entry(1)]
+
+    # Act
+    scored = MapReduceGrouping.score_clusters(
+        records, np.array([0]), np.array([[1.0, 0.0]])
+    )
+
+    # Assert
+    assert scored == [{
+        "records": records, "size": 1, "unique_domains": 1,
+        "source_entropy": 0.0, "effective_sources": 1.0,
+        "burst_z": 0.0, "novelty": 1.0, "trend_score": 0.520,
+    }]
+
+
+def test_scoring_diverse_group_ranks_above_same_host_group() -> None:
+    # Arrange
+    records = [
+        make_entry(1, link="https://A.example:443/1", source="Feed A"),
+        make_entry(2, link="http://a.example/2", source="Feed B"),
+        make_entry(3, link="https://a.example/3"),
+        make_entry(4, link="https://b.example/4"),
+    ]
+
+    # Act
+    scored = MapReduceGrouping.score_clusters(
+        records, np.array([9, 9, 3, 3]), np.tile([1.0, 0.0], (4, 1))
+    )
+
+    # Assert
+    diverse, same_host = scored
+    assert diverse["records"] == records[2:]
+    assert same_host["records"] == records[:2]
+    assert diverse["size"] == same_host["size"] == 2
+    assert diverse["unique_domains"] == 2
+    assert diverse["source_entropy"] == .693
+    assert diverse["effective_sources"] == 2.0
+    assert diverse["burst_z"] == 0.0
+    assert diverse["trend_score"] == 2.472
+    assert same_host["unique_domains"] == 1
+    assert same_host["source_entropy"] == 0.0
+    assert same_host["trend_score"] == .520
+
+
+def test_scoring_skewed_host_shares_use_shannon_entropy() -> None:
+    # Arrange
+    records = [make_entry(i) for i in range(3)] + [
+        make_entry(3, link="https://b/3")
+    ]
+
+    # Act
+    scored = MapReduceGrouping.score_clusters(
+        records, np.zeros(4, dtype=np.int64), np.tile([1.0, 0.0], (4, 1))
+    )
+
+    # Assert
+    assert scored[0]["source_entropy"] == .562
+    assert scored[0]["effective_sources"] == 1.75
+
+
+@pytest.mark.parametrize("aware", [False, True])
+def test_scoring_arrival_span_uses_six_hour_floor(aware: bool) -> None:
+    # Arrange
+    stamps = ["00:00:00", "00:00:00", "03:00:00", "00:00:00",
+              "12:00:00", "00:00:00"]
+    records = [
+        make_entry(i, published_at=f"2026-07-16T{stamp}{'Z' if aware else ''}")
+        for i, stamp in enumerate(stamps)
+    ]
+    if aware:
+        records[2].published_at = "2026-07-16T05:00:00+02:00"
+
+    # Act
+    scored = MapReduceGrouping.score_clusters(
+        records, np.array([0, 0, 1, 1, 2, 2]), np.tile([1.0, 0.0], (6, 1))
+    )
+
+    # Assert
+    assert [group["burst_z"] for group in scored] == [.71, .71, -1.41]
+
+
+def test_scoring_baseline_uses_normalized_centroid_nearest_match() -> None:
+    # Arrange
+    records = [make_entry(1), make_entry(2)]
+    embeddings = np.array([[1.0, 0.0], [0.0, 1.0]])
+    baseline = np.array([[1.0, 0.0], [-1.0, 0.0]])
+
+    # Act
+    scored = MapReduceGrouping.score_clusters(
+        records, np.array([0, 0]), embeddings, baseline
+    )
+
+    # Assert
+    assert scored[0]["novelty"] == .293
+
+
+@pytest.mark.parametrize(
+    ("baseline", "novelty", "trend"),
+    [
+        (None, 1.0, .520),
+        (np.empty((0, 2)), 1.0, .520),
+        (np.array([[1.0, 0.0]]), 0.0, .173),
+        (np.array([[0.0, 1.0]]), 1.0, .520),
+        (np.array([[-1.0, 0.0]]), 2.0, .866),
+    ],
+)
+def test_scoring_novelty_baseline_boundaries(
+    baseline: np.ndarray | None, novelty: float, trend: float,
+) -> None:
+    # Arrange
+    records = [make_entry(1)]
+
+    # Act
+    scored = MapReduceGrouping.score_clusters(
+        records, np.array([0]), np.array([[1.0, 0.0]]), baseline
+    )
+
+    # Assert
+    assert scored[0]["novelty"] == novelty
+    assert scored[0]["trend_score"] == trend
+
+
+def test_scoring_zero_centroid_is_finite() -> None:
+    # Arrange
+    records = [make_entry(1), make_entry(2)]
+
+    # Act
+    scored = MapReduceGrouping.score_clusters(
+        records, np.array([0, 0]), np.array([[1.0, 0.0], [-1.0, 0.0]]),
+        np.array([[1.0, 0.0]]),
+    )
+
+    # Assert
+    assert scored[0]["novelty"] == 1.0
+    assert scored[0]["trend_score"] == .520
+
+
+def test_scoring_ties_keep_group_encounter_order() -> None:
+    # Arrange
+    records = [make_entry(i) for i in range(3)]
+
+    # Act
+    scored = MapReduceGrouping.score_clusters(
+        records, np.array([9, 2, 5]), np.tile([1.0, 0.0], (3, 1))
+    )
+
+    # Assert
+    assert [group["records"] for group in scored] == [[r] for r in records]
+
+
+def test_scoring_empty_input_returns_no_groups() -> None:
+    # Arrange
+    labels = np.array([], dtype=np.int64)
+    embeddings = np.empty((0, 2))
+
+    # Act
+    scored = MapReduceGrouping.score_clusters([], labels, embeddings)
+
+    # Assert
+    assert scored == []
+
+
+@pytest.mark.parametrize(("label_count", "vector_count"), [(1, 2), (2, 1)])
+def test_scoring_misaligned_inputs_raise(
+    label_count: int, vector_count: int,
+) -> None:
+    # Arrange
+    records = [make_entry(1), make_entry(2)]
+
+    # Act / Assert
+    with pytest.raises(ValueError):
+        MapReduceGrouping.score_clusters(
+            records, np.zeros(label_count, dtype=np.int64),
+            np.tile([1.0, 0.0], (vector_count, 1)),
+        )
+
+
+def test_scoring_incompatible_baseline_width_raises() -> None:
+    # Arrange
+    records = [make_entry(1)]
+
+    # Act / Assert
+    with pytest.raises(ValueError):
+        MapReduceGrouping.score_clusters(
+            records, np.array([0]), np.array([[1.0, 0.0]]),
+            np.array([[1.0, 0.0, 0.0]]),
+        )
+
+
+def test_scoring_missing_hostnames_share_unknown_source() -> None:
+    # Arrange
+    records = [
+        make_entry(1, link="/one", source="A"),
+        make_entry(2, link="two", source="B"),
+    ]
+
+    # Act
+    scored = MapReduceGrouping.score_clusters(
+        records, np.array([0, 0]), np.tile([1.0, 0.0], (2, 1))
+    )
+
+    # Assert
+    assert scored[0]["unique_domains"] == 1
+    assert scored[0]["source_entropy"] == 0.0

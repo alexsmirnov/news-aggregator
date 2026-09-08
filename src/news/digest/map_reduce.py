@@ -1,8 +1,12 @@
 import asyncio
 import logging
 import math
+from collections import Counter
 from dataclasses import dataclass
+from datetime import datetime
 from itertools import batched
+from typing import TypedDict
+from urllib.parse import urlsplit
 
 import numpy as np
 from numpy.typing import NDArray
@@ -38,6 +42,23 @@ def _normalize(vector: list[float]) -> list[float]:
     return [component / norm for component in vector]
 
 
+def _arrival_rate(group: list[RssEntry], floor_hours: float = 6.0) -> float:
+    stamps = [datetime.fromisoformat(record.published_at) for record in group]
+    span_hours = (max(stamps) - min(stamps)).total_seconds() / 3600.0
+    return len(group) / max(span_hours, floor_hours)
+
+
+class ScoredCluster(TypedDict):
+    records: list[RssEntry]
+    size: int
+    unique_domains: int
+    source_entropy: float
+    effective_sources: float
+    burst_z: float
+    novelty: float
+    trend_score: float
+
+
 @dataclass(frozen=True, slots=True)
 class EmbeddedEntry:
     entry: RssEntry
@@ -60,8 +81,7 @@ class MapReduceGrouping:
             len(focus),
         )
         raise NotImplementedError(
-            "MapReduceGrouping only computes embeddings so far; "
-            "clustering, scoring, and map/reduce are not implemented"
+            "MapReduceGrouping map/reduce is not implemented"
         )
 
     @staticmethod
@@ -143,6 +163,78 @@ class MapReduceGrouping:
             distance_threshold,
         )
         return labels
+
+    @staticmethod
+    def score_clusters(
+        records: list[RssEntry],
+        labels: NDArray[np.int64],
+        embeddings: NDArray[np.float64],
+        baseline_embeddings: NDArray[np.float64] | None = None,
+    ) -> list[ScoredCluster]:
+        """Rank every group, including singletons, without filtering.
+
+        Embedding rows must be aligned with records and L2-normalized;
+        baseline vectors must have the same width. ISO timestamps within
+        each group must have consistent timezone awareness.
+        """
+        if not len(records) == len(labels) == len(embeddings):
+            raise ValueError("Records, labels and embeddings must be aligned")
+        if not records:
+            return []
+
+        groups: dict[int, list[int]] = {}
+        for index, label in enumerate(labels):
+            groups.setdefault(int(label), []).append(index)
+        rates = {
+            label: _arrival_rate([records[i] for i in indices])
+            for label, indices in groups.items()
+        }
+        # ponytail: corpus rates substitute for a previous-window baseline.
+        rate_values = np.fromiter(rates.values(), dtype=float)
+        mean_rate = float(rate_values.mean())
+        std_rate = max(float(rate_values.std()), 1e-6)
+
+        scored: list[ScoredCluster] = []
+        for label, indices in groups.items():
+            group = [records[i] for i in indices]
+            size = len(group)
+            # Unknown hostnames share one bucket, never one per feed title.
+            counts = Counter(
+                urlsplit(record.link).hostname or "" for record in group
+            )
+            entropy = -sum(
+                (count / size) * math.log(count / size)
+                for count in counts.values()
+            )
+            effective_sources = math.exp(entropy)
+            normalized_entropy = entropy / math.log(size) if size > 1 else 0.0
+            burst_z = (rates[label] - mean_rate) / std_rate
+            novelty = 1.0
+            if baseline_embeddings is not None and len(baseline_embeddings):
+                centroid = _normalize(
+                    embeddings[indices].mean(axis=0).tolist()
+                )
+                similarity = float((baseline_embeddings @ centroid).max())
+                novelty = 1.0 - min(max(similarity, -1.0), 1.0)
+            trend = (
+                (1.0 + max(burst_z, 0.0))
+                * (0.5 + normalized_entropy)
+                * math.log1p(effective_sources)
+                * (0.5 + novelty)
+            )
+            scored.append(ScoredCluster(
+                records=group,
+                size=size,
+                unique_domains=len(counts),
+                source_entropy=round(entropy, 3),
+                effective_sources=round(effective_sources, 2),
+                burst_z=round(burst_z, 2),
+                novelty=round(novelty, 3),
+                trend_score=round(trend, 3),
+            ))
+        return sorted(
+            scored, key=lambda group: group["trend_score"], reverse=True
+        )
 
     async def embed_entries(
         self, entries: list[RssEntry]

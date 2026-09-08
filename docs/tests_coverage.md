@@ -15,7 +15,7 @@ Pytest suite in `tests/` with `asyncio_mode = "auto"`, module-scoped event loop,
 - [test_archive.py](../tests/test_archive.py) - Digest path layout, available-date discovery (ordering, malformed files, prefix collisions), digest loading, `build_page` navigation, edge cases, link scheme filtering
 - [test_pages.py](../tests/test_pages.py) - HTTP-level rendering: aggregation/date selection, 404 paths, empty and corrupt archives, `<details>` rendering, XSS escaping, `javascript:` link filtering, navigation links, HEAD support, redirects
 - [test_prompts.py](../tests/test_prompts.py) - Exact prompt text assertions: focus embedding, date grounding, required summary sections, link joining
-- [test_map_reduce.py](../tests/test_map_reduce.py) - `MapReduceGrouping`: embedding batching/normalization/truncation/fallback, `calibrate_threshold` corpus-similarity sampling and clamping, `cluster` average-linkage behavior (singleton survival, chaining resistance), `NotImplementedError` from `__call__`
+- [test_map_reduce.py](../tests/test_map_reduce.py) - `MapReduceGrouping`: embedding batching/normalization/truncation/fallback, `calibrate_threshold` corpus-similarity sampling and clamping, `cluster` average-linkage behavior (singleton survival, chaining resistance), scoring by hostname entropy/arrival bursts/novelty, positive singleton scores, stable ranking and boundary inputs, `NotImplementedError` from `__call__`
 
 ## Evaluation Suite (tests/evaluation/) #tests
 
@@ -24,7 +24,7 @@ Frozen-dataset LLM quality evaluation; requires LLM credentials and is skipped o
 - [conftest.py](../tests/evaluation/conftest.py) - Dataset discovery from `data/rss_entries_*.json`, grouping implementation registry (`GROUPING_IMPLEMENTATIONS`), judge model setup (deepeval `GPTModel` via the LiteLLM router), package-scoped real grouping/refinement runs shared across both eval test files
 - [test_grouping_eval.py](../tests/evaluation/test_grouping_eval.py) - Threshold-gated grouping metrics per dataset x grouping implementation: pairwise F1 >= 0.6, GEval grouping correctness >= 0.6
 - [test_summary_eval.py](../tests/evaluation/test_summary_eval.py) - Threshold-gated summary metrics (default grouping implementation only): ROUGE-L mean >= 0.3, GEval summary faithfulness >= 0.6
-- [test_cluster_eval.py](../tests/evaluation/test_cluster_eval.py) - Not threshold-gated: embeds each dataset's frozen entries, runs `MapReduceGrouping.calibrate_threshold` + `cluster`, and writes clusters (titles and links) as YAML to the system tmp directory for manual inspection
+- [test_cluster_eval.py](../tests/evaluation/test_cluster_eval.py) - Not quality-threshold-gated: embeds each dataset's frozen entries, calibrates/clusters content vectors, and scores the final sigma=3.2 result. Writes score-ranked groups with titles, links, and scoring metadata to repository-relative `tmp/cluster_eval_<dataset_id>.yaml`; verifies YAML metadata, entry conservation, group sizes, and ordering without requiring gold groups
 - [test_metrics.py](../tests/evaluation/test_metrics.py) - Deterministic metric implementations: pairwise precision/recall/F1, ROUGE-L, greedy group matching, link-set extraction
 - [metrics.py](../tests/evaluation/metrics.py) - Metric helpers: pair-based clustering metrics, ROUGE-L scoring, Jaccard group matching, link-set extraction
 - [capture_dataset.py](../tests/evaluation/capture_dataset.py) - Standalone utility that freezes a Miniflux RSS snapshot into `data/rss_entries_<date>_<category>.json`
