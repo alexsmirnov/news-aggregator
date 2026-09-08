@@ -12,8 +12,20 @@ import numpy as np
 from numpy.typing import NDArray
 from sklearn.cluster import AgglomerativeClustering
 
+from news.digest.grouping import PipelineError, format_entry
 from news.digest.llm_client import LlmClient
-from news.digest.schemas import NewsRecord, RssEntry
+from news.digest.prompts import (
+    cluster_summary_system_prompt,
+    cluster_summary_user_prompt,
+    merge_system_prompt,
+    merge_user_prompt,
+)
+from news.digest.schemas import (
+    ClusterSummary,
+    MergeResponse,
+    NewsRecord,
+    RssEntry,
+)
 from news.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -23,6 +35,8 @@ CHARS_PER_TOKEN = 4  # ponytail: heuristic; BGE tokenizer not available
 EMBED_MAX_INPUT_CHARS = EMBED_MAX_INPUT_TOKENS * CHARS_PER_TOKEN
 EMBED_BATCH_SIZE = 64
 MAX_CONCURRENT_EMBED_REQUESTS = 8
+MAX_CONCURRENT_MAP_CALLS = 8
+REDUCE_BATCH_SIZE = 8
 MAX_COSINE_DISTANCE = 2.0
 
 
@@ -66,6 +80,14 @@ class EmbeddedEntry:
     content_vector: list[float]
 
 
+@dataclass(frozen=True, slots=True)
+class Candidate:
+    title: str
+    summary: str
+    entries: tuple[RssEntry, ...]
+    trend_score: float
+
+
 class MapReduceGrouping:
     def __init__(self, settings: Settings, llm: LlmClient) -> None:
         self.settings = settings
@@ -75,14 +97,199 @@ class MapReduceGrouping:
         self, entries: list[RssEntry], *, focus: str
     ) -> list[NewsRecord]:
         logger.info(
-            "map-reduce grouping not implemented "
-            "entries_count=%s focus_chars=%s",
+            "map-reduce grouping started entries_count=%s focus_chars=%s",
             len(entries),
             len(focus),
         )
-        raise NotImplementedError(
-            "MapReduceGrouping map/reduce is not implemented"
+        embedded = await self.embed_entries(entries)
+        vectors = np.asarray(
+            [entry.content_vector for entry in embedded], dtype=np.float64
         )
+        threshold = self.calibrate_threshold(
+            vectors, k_sigma=self.settings.grouping_k_sigma
+        )
+        labels = self.cluster(vectors, threshold)
+        scored = self.score_clusters(entries, labels, vectors)
+        selected = scored[: self.settings.grouping_map_clusters]
+        logger.info(
+            "selected clusters for mapping selected_count=%s "
+            "total_clusters=%s",
+            len(selected),
+            len(scored),
+        )
+        candidates = await self._map_clusters(selected, focus)
+        collapsed = await self._collapse(candidates)
+        records = self._to_news_records(
+            collapsed, self.settings.grouping_max_records
+        )
+        logger.info(
+            "map-reduce grouping completed records_count=%s", len(records)
+        )
+        return records
+
+    async def _map_one(
+        self,
+        cluster: ScoredCluster,
+        focus: str,
+        semaphore: asyncio.Semaphore,
+    ) -> Candidate:
+        block = "\n---\n".join(
+            format_entry(
+                entry.id,
+                entry,
+                content_max_chars=self.settings.grouping_content_max_chars,
+            )
+            for entry in cluster["records"]
+        )
+        parsed: ClusterSummary | None = None
+        async with semaphore:
+            try:
+                parsed = await self.llm.chat_parsed(
+                    self.settings.model_grouping,
+                    [
+                        {
+                            "role": "system",
+                            "content": cluster_summary_system_prompt(focus),
+                        },
+                        {
+                            "role": "user",
+                            "content": cluster_summary_user_prompt(block),
+                        },
+                    ],
+                    response_format=ClusterSummary,
+                    reasoning_effort="medium",
+                    temperature=0.1,
+                )
+            except Exception:
+                logger.warning(
+                    "cluster summary failed, falling back to entry title",
+                    exc_info=True,
+                )
+        if parsed is None:
+            fallback_entry = cluster["records"][0]
+            return Candidate(
+                title=fallback_entry.title,
+                summary="",
+                entries=tuple(cluster["records"]),
+                trend_score=cluster["trend_score"],
+            )
+        return Candidate(
+            title=parsed.title,
+            summary=parsed.summary,
+            entries=tuple(cluster["records"]),
+            trend_score=cluster["trend_score"],
+        )
+
+    async def _map_clusters(
+        self, clusters: list[ScoredCluster], focus: str
+    ) -> list[Candidate]:
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_MAP_CALLS)
+        return list(
+            await asyncio.gather(
+                *(
+                    self._map_one(cluster, focus, semaphore)
+                    for cluster in clusters
+                )
+            )
+        )
+
+    @staticmethod
+    def _merge_batch(
+        batch: list[Candidate], response: MergeResponse
+    ) -> list[Candidate]:
+        merged: list[Candidate] = []
+        referenced: set[int] = set()
+        for group in response.groups:
+            valid_indexes = [
+                index
+                for index in group.member_indexes
+                if 1 <= index <= len(batch)
+            ]
+            members = [batch[index - 1] for index in valid_indexes]
+            if not members:
+                continue
+            referenced.update(valid_indexes)
+            entries_by_link: dict[str, RssEntry] = {}
+            for candidate in members:
+                for entry in candidate.entries:
+                    entries_by_link.setdefault(entry.link, entry)
+            merged.append(Candidate(
+                title=group.title,
+                summary=group.summary,
+                entries=tuple(entries_by_link.values()),
+                trend_score=max(c.trend_score for c in members),
+            ))
+        leftovers = [
+            candidate
+            for index, candidate in enumerate(batch, start=1)
+            if index not in referenced
+        ]
+        return merged + leftovers
+
+    async def _reduce_one_batch(
+        self, batch: list[Candidate]
+    ) -> list[Candidate]:
+        numbered = "\n---\n".join(
+            f"# Entity {index}\nTitle: {candidate.title}\n"
+            f"Summary: {candidate.summary}\n"
+            for index, candidate in enumerate(batch, start=1)
+        )
+        response = await self.llm.chat_parsed(
+            self.settings.model_grouping,
+            [
+                {"role": "system", "content": merge_system_prompt()},
+                {"role": "user", "content": merge_user_prompt(numbered)},
+            ],
+            response_format=MergeResponse,
+            reasoning_effort="medium",
+            temperature=0.1,
+        )
+        if response is None:
+            logger.warning("merge query returned empty content")
+            raise PipelineError("merge query returned no content")
+        return self._merge_batch(batch, response)
+
+    async def _reduce_level(self, level: list[Candidate]) -> list[Candidate]:
+        batches = [list(batch) for batch in batched(level, REDUCE_BATCH_SIZE)]
+        merged_batches = await asyncio.gather(
+            *(self._reduce_one_batch(batch) for batch in batches)
+        )
+        return [candidate for batch in merged_batches for candidate in batch]
+
+    async def _collapse(self, level: list[Candidate]) -> list[Candidate]:
+        while len(level) > REDUCE_BATCH_SIZE:
+            next_level = await self._reduce_level(level)
+            logger.info(
+                "reduce pass completed previous_count=%s next_count=%s",
+                len(level),
+                len(next_level),
+            )
+            if len(next_level) >= len(level):
+                logger.warning(
+                    "reduce pass did not shrink level, stopping "
+                    "level_count=%s",
+                    len(level),
+                )
+                break
+            level = next_level
+        return level
+
+    @staticmethod
+    def _to_news_records(
+        candidates: list[Candidate], max_records: int
+    ) -> list[NewsRecord]:
+        ranked = sorted(
+            candidates,
+            key=lambda candidate: candidate.trend_score,
+            reverse=True,
+        )
+        return [
+            NewsRecord(
+                title=candidate.title,
+                links=[entry.link for entry in candidate.entries],
+            )
+            for candidate in ranked[:max_records]
+        ]
 
     @staticmethod
     def calibrate_threshold(

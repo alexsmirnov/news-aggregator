@@ -1,17 +1,27 @@
 import math
+import types
 from typing import cast
 
 import numpy as np
 import pytest
 from tests.conftest import FakeLlm
 
+from news.digest.grouping import PipelineError
 from news.digest.llm_client import LlmClient
 from news.digest.map_reduce import (
     EMBED_BATCH_SIZE,
     EMBED_MAX_INPUT_TOKENS,
+    REDUCE_BATCH_SIZE,
+    Candidate,
     MapReduceGrouping,
+    ScoredCluster,
 )
-from news.digest.schemas import RssEntry
+from news.digest.schemas import (
+    ClusterSummary,
+    MergedGroup,
+    MergeResponse,
+    RssEntry,
+)
 from news.settings import Settings
 
 
@@ -40,6 +50,39 @@ def make_grouping(
     settings_stub: Settings, llm: FakeLlm
 ) -> MapReduceGrouping:
     return MapReduceGrouping(settings_stub, cast(LlmClient, llm))
+
+
+def make_settings(settings_stub: Settings, **overrides: object) -> Settings:
+    return cast(
+        Settings,
+        types.SimpleNamespace(**{**vars(settings_stub), **overrides}),
+    )
+
+
+def make_scored_cluster(
+    records: list[RssEntry], *, trend_score: float = 1.0
+) -> ScoredCluster:
+    return ScoredCluster(
+        records=records,
+        size=len(records),
+        unique_domains=1,
+        source_entropy=0.0,
+        effective_sources=1.0,
+        burst_z=0.0,
+        novelty=1.0,
+        trend_score=trend_score,
+    )
+
+
+def make_candidate(
+    entry: RssEntry, *, title: str | None = None, trend_score: float = 1.0
+) -> Candidate:
+    return Candidate(
+        title=title or entry.title,
+        summary="",
+        entries=(entry,),
+        trend_score=trend_score,
+    )
 
 
 async def test_embed_entries_binds_title_and_content_vectors(
@@ -178,15 +221,208 @@ async def test_embed_entries_falls_back_to_sentinel_when_both_blank(
     assert inputs == ["(empty)", "(empty)"]
 
 
-async def test_call_raises_not_implemented(
+async def test_call_clusters_embeds_and_titles_each_group(
+    settings_stub: Settings, fake_llm: type[FakeLlm]
+) -> None:
+    # Arrange: two identical-vector pairs cluster together at the
+    # calibrated threshold; two orthogonal pairs stay apart (see plan
+    # note: threshold clamps to 0.0 on this corpus, so only exact-distance
+    # -0 duplicates merge).
+    entries = [
+        make_entry(1, link="https://a.example/1"),
+        make_entry(2, link="https://a.example/2"),
+        make_entry(3, link="https://b.example/3"),
+        make_entry(4, link="https://b.example/4"),
+    ]
+    vectors = [[1.0, 0.0], [1.0, 0.0], [0.0, 1.0], [0.0, 1.0]]
+    llm = fake_llm(
+        embeddings_results=[vectors + vectors],
+        chat_parsed_results=[
+            ClusterSummary(title="Group 1", summary="s1"),
+            ClusterSummary(title="Group 2", summary="s2"),
+        ],
+    )
+    # ponytail: k_sigma=3.0 (the settings_stub default) clamps the
+    # threshold to 0.0 on this tiny corpus, and 0.0 rejects even exact
+    # duplicates because their cosine distance is float noise (~1e-16),
+    # not exactly 0. k_sigma=1.0 keeps the threshold a wide, comfortably
+    # positive margin between the duplicate pairs (~0) and the orthogonal
+    # pairs (1.0).
+    settings = make_settings(settings_stub, grouping_k_sigma=1.0)
+    grouping = make_grouping(settings, llm)
+
+    # Act
+    result = await grouping(entries, focus="FOCUS")
+
+    # Assert
+    assert len(result) == 2
+    assert {link for record in result for link in record.links} == {
+        entry.link for entry in entries
+    }
+    assert all(len(record.links) == 2 for record in result)
+    assert {record.title for record in result} == {"Group 1", "Group 2"}
+
+
+async def test_call_limits_map_calls_to_grouping_map_clusters(
+    settings_stub: Settings, fake_llm: type[FakeLlm]
+) -> None:
+    # Arrange: group B has higher source diversity so it always outranks
+    # group A regardless of clustering label order (deterministic top-1).
+    entries = [
+        make_entry(1, link="https://a.example/1", source="A"),
+        make_entry(2, link="https://a.example/2", source="A"),
+        make_entry(3, link="https://b.example/3", source="B"),
+        make_entry(4, link="https://c.example/4", source="C"),
+    ]
+    vectors = [[1.0, 0.0], [1.0, 0.0], [0.0, 1.0], [0.0, 1.0]]
+    llm = fake_llm(
+        embeddings_results=[vectors + vectors],
+        chat_parsed_results=[ClusterSummary(title="Top", summary="s")],
+    )
+    settings = make_settings(
+        settings_stub, grouping_map_clusters=1, grouping_k_sigma=1.0
+    )
+    grouping = make_grouping(settings, llm)
+
+    # Act
+    result = await grouping(entries, focus="FOCUS")
+
+    # Assert
+    assert len(llm.chat_parsed_calls) == 1
+    assert len(result) == 1
+    assert set(result[0].links) == {entries[2].link, entries[3].link}
+
+
+def test_merge_batch_unions_links_across_merged_clusters() -> None:
+    # Arrange
+    entry_a = make_entry(1, link="https://a")
+    entry_b = make_entry(2, link="https://b")
+    batch = [make_candidate(entry_a), make_candidate(entry_b)]
+    response = MergeResponse(groups=[
+        MergedGroup(title="Merged", summary="s", member_indexes=[1, 2]),
+    ])
+
+    # Act
+    merged = MapReduceGrouping._merge_batch(batch, response)
+
+    # Assert
+    assert len(merged) == 1
+    assert merged[0].title == "Merged"
+    assert merged[0].entries == (entry_a, entry_b)
+    assert merged[0].trend_score == 1.0
+
+
+def test_merge_batch_keeps_unreferenced_candidate_unchanged() -> None:
+    # Arrange
+    entry_a = make_entry(1, link="https://a")
+    entry_b = make_entry(2, link="https://b")
+    candidate_a = make_candidate(entry_a)
+    candidate_b = make_candidate(entry_b)
+    batch = [candidate_a, candidate_b]
+    response = MergeResponse(groups=[
+        MergedGroup(title="Merged", summary="s", member_indexes=[1]),
+    ])
+
+    # Act
+    merged = MapReduceGrouping._merge_batch(batch, response)
+
+    # Assert
+    assert candidate_b in merged
+    assert len(merged) == 2
+
+
+def test_merge_batch_ignores_out_of_range_index() -> None:
+    # Arrange
+    entry_a = make_entry(1, link="https://a")
+    entry_b = make_entry(2, link="https://b")
+    candidate_a = make_candidate(entry_a)
+    candidate_b = make_candidate(entry_b)
+    batch = [candidate_a, candidate_b]
+    response = MergeResponse(groups=[
+        MergedGroup(title="Merged", summary="s", member_indexes=[1, 5]),
+    ])
+
+    # Act
+    merged = MapReduceGrouping._merge_batch(batch, response)
+
+    # Assert
+    assert merged[0].entries == (entry_a,)
+    assert candidate_b in merged
+
+
+async def test_map_clusters_falls_back_to_entry_title_on_failure(
     settings_stub: Settings, fake_llm: type[FakeLlm]
 ) -> None:
     # Arrange
-    grouping = make_grouping(settings_stub, fake_llm())
+    entry = make_entry(1, title="Fallback Title")
+    cluster = make_scored_cluster([entry], trend_score=3.5)
+    llm = fake_llm(chat_parsed_results=[RuntimeError("boom")])
+    grouping = make_grouping(settings_stub, llm)
+
+    # Act
+    candidates = await grouping._map_clusters([cluster], focus="FOCUS")
+
+    # Assert
+    assert candidates == [Candidate(
+        title="Fallback Title", summary="", entries=(entry,), trend_score=3.5,
+    )]
+
+
+def test_to_news_records_orders_by_trend_score_and_truncates() -> None:
+    # Arrange
+    low = make_candidate(make_entry(1, link="https://a"), trend_score=1.0)
+    high = make_candidate(make_entry(2, link="https://b"), trend_score=3.0)
+    mid = make_candidate(make_entry(3, link="https://c"), trend_score=2.0)
+
+    # Act
+    records = MapReduceGrouping._to_news_records(
+        [low, high, mid], max_records=2
+    )
+
+    # Assert
+    assert [record.title for record in records] == [high.title, mid.title]
+
+
+async def test_collapse_stops_when_reduce_pass_does_not_shrink(
+    settings_stub: Settings, fake_llm: type[FakeLlm]
+) -> None:
+    # Arrange: 9 candidates split into batches of 8 and 1; each merge
+    # response maps every index to itself, so neither batch shrinks.
+    level = [
+        make_candidate(make_entry(i, link=f"https://e{i}"))
+        for i in range(REDUCE_BATCH_SIZE + 1)
+    ]
+    no_op_response_full = MergeResponse(groups=[
+        MergedGroup(title=c.title, summary="", member_indexes=[i])
+        for i, c in enumerate(level[:REDUCE_BATCH_SIZE], start=1)
+    ])
+    no_op_response_single = MergeResponse(groups=[
+        MergedGroup(title=level[-1].title, summary="", member_indexes=[1]),
+    ])
+    llm = fake_llm(
+        chat_parsed_results=[no_op_response_full, no_op_response_single]
+    )
+    grouping = make_grouping(settings_stub, llm)
+
+    # Act
+    result = await grouping._collapse(level)
+
+    # Assert
+    assert len(llm.chat_parsed_calls) == 2
+    assert len(result) == len(level)
+
+
+async def test_reduce_level_raises_pipeline_error_on_empty_response(
+    settings_stub: Settings, fake_llm: type[FakeLlm]
+) -> None:
+    # Arrange
+    batch = [make_candidate(make_entry(1))]
+    llm = fake_llm(chat_parsed_results=[None])
+    grouping = make_grouping(settings_stub, llm)
 
     # Act / Assert
-    with pytest.raises(NotImplementedError):
-        await grouping([make_entry(1)], focus="FOCUS")
+    with pytest.raises(PipelineError):
+        await grouping._reduce_level(batch)
 
 
 def test_calibrate_threshold_identical_corpus_is_zero() -> None:

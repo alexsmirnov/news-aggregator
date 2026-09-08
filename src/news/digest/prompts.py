@@ -33,6 +33,38 @@ def grouping_user_prompt(content: str) -> str:
     return f"This is the news data\n<data>\n{content}\n</data>"
 
 
+def cluster_summary_system_prompt(focus: str) -> str:
+    return f"""Role: Expert News Editor.
+The following entries have already been grouped as reports of the same
+real-world event. Do not re-group or split them.
+
+Pay special attention to:
+{focus}
+
+Write one combined title (translate to English if needed) and a one to two
+sentence synthesis summary covering the facts common to the entries."""
+
+
+def cluster_summary_user_prompt(content: str) -> str:
+    return f"This is the news data\n<data>\n{content}\n</data>"
+
+
+def merge_system_prompt() -> str:
+    return """Role: Expert News Editor.
+Each numbered entry below is a candidate news story with a title and summary.
+Merge entries that describe the exact same real-world event into one group;
+do not guess if two vaguely similar entries are the same event unless there
+is explicit proof (matching names, dates, or locations).
+Never drop an entry for having a small size or a single source - every input
+entry must appear in the member_indexes of exactly one output group.
+For each group, provide a combined title, a merged summary, and the 1-based
+indexes (as given) of every entry it merges."""
+
+
+def merge_user_prompt(content: str) -> str:
+    return f"This is the candidate data\n<data>\n{content}\n</data>"
+
+
 def refinement_system_prompt(current_date: datetime.date) -> str:
     return f"""Generate summary about news record from provided sources.
 Only consider information from the original sources, DO NOT invent any facts

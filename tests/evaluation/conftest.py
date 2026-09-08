@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 from news.digest.grouping import Grouping, LlmGrouping, format_entries
 from news.digest.llm_client import LlmClient
+from news.digest.map_reduce import MapReduceGrouping
 from news.digest.miniflux_client import MinifluxClient
 from news.digest.schemas import DigestRecord, NewsRecord, RssEntry
 from news.digest.service import DigestService
@@ -33,6 +34,7 @@ GROUPING_IMPLEMENTATIONS: dict[
     str, Callable[[Settings, LlmClient], Grouping]
 ] = {
     "llm": LlmGrouping,
+    "map_reduce": MapReduceGrouping,
 }
 DEFAULT_GROUPING = "llm"
 

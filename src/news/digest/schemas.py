@@ -21,6 +21,25 @@ class NewsResponse(BaseModel):
     records: list[NewsRecord] = Field(description="most popular breaking news")
 
 
+class ClusterSummary(BaseModel):
+    title: str = Field(description="combined news headline, in English")
+    summary: str = Field(description="one to two sentence synthesis")
+
+
+class MergedGroup(BaseModel):
+    title: str = Field(description="combined news headline, in English")
+    summary: str = Field(description="one to two sentence synthesis")
+    member_indexes: list[int] = Field(
+        description="1-based indexes of the input entries this group merges"
+    )
+
+
+class MergeResponse(BaseModel):
+    groups: list[MergedGroup] = Field(
+        description="entries merged by shared real-world event"
+    )
+
+
 class DigestRecord(BaseModel):
     title: str | None
     refined_summary: str | None

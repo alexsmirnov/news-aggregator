@@ -1,6 +1,6 @@
 # Configuration & Environment
 
-All configuration is defined in `Settings` (pydantic-settings `BaseSettings`, loads `.env`, process environment overrides take precedence) at [src/news/settings.py:46-69](../src/news/settings.py#L46-L69). #config #environment
+All configuration is defined in `Settings` (pydantic-settings `BaseSettings`, loads `.env`, process environment overrides take precedence) at [src/news/settings.py:49-77](../src/news/settings.py#L49-L77). #config #environment
 
 ## Required Variables #config #env
 
@@ -21,7 +21,10 @@ All configuration is defined in `Settings` (pydantic-settings `BaseSettings`, lo
 | `FETCH_LIMIT` #env | int | `10000` | Max entries fetched per aggregation ([settings.py:58](../src/news/settings.py#L58)) |
 | `ENTRY_CONTENT_MAX_CHARS` #env | int | `20000` | Content truncation after HTML stripping ([settings.py:59](../src/news/settings.py#L59)) |
 | `GROUPING_CONTENT_MAX_CHARS` #env | int | `300` | Per-entry content limit in the grouping prompt ([settings.py:60](../src/news/settings.py#L60)) |
-| `REFINE_MAX_LINKS` #env | int | `10` | Max links passed to the refinement model per group ([settings.py:61](../src/news/settings.py#L61)) |
+| `GROUPING_K_SIGMA` #env | float | `3.0` | `MapReduceGrouping` clustering tightness: std devs above the corpus random-pair similarity baseline ([settings.py:64](../src/news/settings.py#L64)) |
+| `GROUPING_MAP_CLUSTERS` #env | int | `40` | `MapReduceGrouping` recall knob: how many top-ranked clusters get a map (titling) LLM call ([settings.py:65](../src/news/settings.py#L65)) |
+| `GROUPING_MAX_RECORDS` #env | int | `20` | `MapReduceGrouping` cost knob: max merged records returned to `refine_all` ([settings.py:66](../src/news/settings.py#L66)) |
+| `REFINE_MAX_LINKS` #env | int | `10` | Max links passed to the refinement model per group ([settings.py:67](../src/news/settings.py#L67)) |
 | `MODEL_TRENDING` #env | str | `sonar-reasoning-pro` | Trending model name (currently unused by the pipeline) ([settings.py:62](../src/news/settings.py#L62)) |
 | `MODEL_GROUPING` #env | str | `gpt-5-terra` | Model for news grouping ([settings.py:63](../src/news/settings.py#L63)) |
 | `MODEL_REFINEMENT` #env | str | `gemini-flash` | Model for summary refinement ([settings.py:64](../src/news/settings.py#L64)) |

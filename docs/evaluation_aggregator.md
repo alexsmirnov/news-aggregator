@@ -6,14 +6,14 @@ Quality evaluation for the LLM stages of the digest pipeline — news grouping a
 
 The suite evaluates the two LLM stages of the pipeline (see [Architecture Overview](architecture_overview.md)):
 
-1. **Grouping** — does a `Grouping` implementation ([src/news/digest/grouping.py](../src/news/digest/grouping.py)) cluster entries about the same real-world event together? The default and only registered implementation is `LlmGrouping`.
+1. **Grouping** — does a `Grouping` implementation ([src/news/digest/grouping.py](../src/news/digest/grouping.py)) cluster entries about the same real-world event together? Two implementations are registered: `LlmGrouping` (default) and the cluster-then-summarize `MapReduceGrouping` ([src/news/digest/map_reduce.py](../src/news/digest/map_reduce.py)).
 2. **Summarization** — does `DigestService.refine_all` ([src/news/digest/service.py:201-233](../src/news/digest/service.py#L201-L233)) produce summaries that cover the key facts of human-written reference summaries without invented facts?
 
 Both stages are executed for real against the configured LLM router (`LITELLM_ROUTER` / `LITELLM_API_KEY`); only the Miniflux client is stubbed out with a dummy object since entries come from frozen files ([tests/evaluation/conftest.py:151-156](../tests/evaluation/conftest.py#L151-L156)).
 
 ## Grouping Implementation Registry #evaluation
 
-`GROUPING_IMPLEMENTATIONS` ([conftest.py:32-37](../tests/evaluation/conftest.py#L32-L37)) maps a name to a `(Settings, LlmClient) -> Grouping` factory; the suite is parametrized over this registry via the `grouping_name` fixture ([conftest.py:67-69](../tests/evaluation/conftest.py#L67-L69)), so every grouping test id carries the implementation name (e.g. `test_grouping_pairwise_f1[2026_07_22_Economy-llm]`). Adding a new implementation to compare means adding one entry here — no test changes required. `DEFAULT_GROUPING = "llm"` ([conftest.py:37](../tests/evaluation/conftest.py#L37)) is the implementation summary evaluation runs against (see below).
+`GROUPING_IMPLEMENTATIONS` ([conftest.py:33-38](../tests/evaluation/conftest.py#L33-L38)) maps a name to a `(Settings, LlmClient) -> Grouping` factory; it currently holds two entries, `"llm"` (`LlmGrouping`) and `"map_reduce"` (`MapReduceGrouping`). The suite is parametrized over this registry via the `grouping_name` fixture ([conftest.py:69-71](../tests/evaluation/conftest.py#L69-L71)), so every grouping test id carries the implementation name (e.g. `test_grouping_pairwise_f1[2026_07_22_Economy-llm]`, `test_grouping_pairwise_f1[2026_07_22_Economy-map_reduce]`). Adding a new implementation to compare means adding one entry here — no test changes required. `DEFAULT_GROUPING = "llm"` ([conftest.py:39](../tests/evaluation/conftest.py#L39)) is the implementation summary evaluation runs against (see below); switching the production default in `src/news/server.py` is a separate decision made on these evaluation numbers.
 
 ## Quality Thresholds #evaluation
 
