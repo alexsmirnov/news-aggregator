@@ -448,7 +448,7 @@ class MapReduceGrouping:
     ) -> list[EmbeddedEntry]:
         title_texts = [_embedding_input(entry.title) for entry in entries]
         content_texts = [
-            _embedding_input(entry.content, fallback=entry.title)
+            _embedding_input(f"{entry.title} {entry.content}", fallback=entry.title)
             for entry in entries
         ]
         vectors = await self._embed_texts(title_texts + content_texts)

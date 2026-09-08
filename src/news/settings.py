@@ -62,8 +62,8 @@ class Settings(BaseSettings):
     entry_content_max_chars: int = 20000
     grouping_content_max_chars: int = 300
     grouping_k_sigma: float = 3.0
-    grouping_map_clusters: int = 40
-    grouping_max_records: int = 20
+    grouping_map_clusters: int = 80
+    grouping_max_records: int = 40
     refine_max_links: int = 10
     model_trending: str = "sonar-reasoning-pro"
     model_grouping: str = "gpt-5-terra"
