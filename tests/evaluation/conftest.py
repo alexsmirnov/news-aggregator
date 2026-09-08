@@ -1,4 +1,5 @@
 import json
+import logging
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -21,6 +22,12 @@ from news.digest.schemas import DigestRecord, NewsRecord, RssEntry
 from news.digest.service import DigestService
 from news.settings import Settings
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s:%(lineno)d - %(levelname)s - %(message)s",
+)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 DATA_DIR = Path(__file__).parent / "data"
 
 _ENTRY_PREFIX = "rss_entries_"
@@ -33,7 +40,7 @@ JUDGE_MIN = 0.6
 GROUPING_IMPLEMENTATIONS: dict[
     str, Callable[[Settings, LlmClient], Grouping]
 ] = {
-    "llm": LlmGrouping,
+    # "llm": LlmGrouping,
     "map_reduce": MapReduceGrouping,
 }
 DEFAULT_GROUPING = "llm"
