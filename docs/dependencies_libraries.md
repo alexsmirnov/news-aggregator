@@ -15,9 +15,9 @@ Docs: https://www.uvicorn.org/
 Used in: [src/news/__init__.py:6](../src/news/__init__.py#L6), [src/news/__init__.py:91-97](../src/news/__init__.py#L91-L97)
 
 ### APScheduler `>=3.11,<4`
-`AsyncIOScheduler` with interval trigger for the periodical digest job inside the server.
+`AsyncIOScheduler` with cron trigger for the periodical digest job inside the server.
 Docs: https://apscheduler.readthedocs.io/ | Context7: `/agronholm/apscheduler`
-Used in: [src/news/scheduler.py:4-5](../src/news/scheduler.py#L4-L5), [src/news/scheduler.py:19-27](../src/news/scheduler.py#L19-L27)
+Used in: [src/news/scheduler.py:4-5](../src/news/scheduler.py#L4-L5), [src/news/scheduler.py:24-32](../src/news/scheduler.py#L24-L32)
 
 ### Jinja2 `>=3.1`
 HTML template engine for digest pages (`base.html`, `digest.html`).

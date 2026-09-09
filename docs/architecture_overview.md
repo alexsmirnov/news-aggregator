@@ -37,7 +37,7 @@ Aggregations run sequentially per pipeline run; a failing aggregation is logged 
 
 ## Scheduling #architecture
 
-A single interval job (`news_digest`) runs `DigestService.__call__` every `schedule_interval_hours` (default 12) with `max_instances=1` and `coalesce=True` ([src/news/scheduler.py:13-28](../src/news/scheduler.py#L13-L28)). The FastAPI lifespan constructs settings, opens shared Miniflux and LLM clients, starts the scheduler, and stores it on `app.state.scheduler` ([src/news/scheduler.py:31-44](../src/news/scheduler.py#L31-L44)). `POST /aggregate` reschedules the job to run immediately ([src/news/aggregate.py:46-63](../src/news/aggregate.py#L46-L63)); a one-shot run without the server is available via the `news aggregate` CLI command ([src/news/server.py:22-28](../src/news/server.py#L22-L28)).
+A single cron job (`news_digest`) runs `DigestService.__call__` on the `schedule_cron` crontab expression (default `0 7,12,17 * * *` — 7AM, 12PM, 5PM) in `schedule_timezone` (default `America/Los_Angeles`) with `max_instances=1` and `coalesce=True` ([src/news/scheduler.py:18-33](../src/news/scheduler.py#L18-L33)). The FastAPI lifespan constructs settings, opens shared Miniflux and LLM clients, starts the scheduler, and stores it on `app.state.scheduler` ([src/news/scheduler.py:36-49](../src/news/scheduler.py#L36-L49)). `POST /aggregate` reschedules the job to run immediately ([src/news/aggregate.py:46-63](../src/news/aggregate.py#L46-L63)); a one-shot run without the server is available via the `news aggregate` CLI command ([src/news/server.py:22-28](../src/news/server.py#L22-L28)).
 
 ## AI Integration #architecture #llm
 

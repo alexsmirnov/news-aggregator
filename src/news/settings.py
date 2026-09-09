@@ -74,4 +74,5 @@ class Settings(BaseSettings):
     retry_attempts: int = 3
     retry_min_wait_s: int = 2
     retry_max_wait_s: int = 30
-    schedule_interval_hours: int = 12
+    schedule_cron: str = "0 7,12,17 * * *"
+    schedule_timezone: str = "America/Los_Angeles"

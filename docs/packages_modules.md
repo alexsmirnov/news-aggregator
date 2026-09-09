@@ -14,7 +14,7 @@ Modules:
 |---|---|
 | `__init__.py` | CLI: `server` and `aggregate` subcommands, logging configuration, Uvicorn launch ([src/news/__init__.py:10-97](../src/news/__init__.py#L10-L97)) |
 | `server.py` | `create_app()` app factory and `run_aggregate()` one-shot pipeline runner ([src/news/server.py:13-28](../src/news/server.py#L13-L28)) |
-| `scheduler.py` | `build_scheduler()` interval job and `scheduler_lifespan` FastAPI lifespan ([src/news/scheduler.py:16-44](../src/news/scheduler.py#L16-L44)) |
+| `scheduler.py` | `build_scheduler()` cron job and `scheduler_lifespan` FastAPI lifespan ([src/news/scheduler.py:18-49](../src/news/scheduler.py#L18-L49)) |
 | `aggregate.py` | `/aggregate` GET/POST router and `AggregateStatus` model ([src/news/aggregate.py:11-63](../src/news/aggregate.py#L11-L63)) |
 | `pages.py` | `/` and `/digest/...` page routes, Jinja2 templates setup, settings dependency ([src/news/pages.py:17-91](../src/news/pages.py#L17-L91)) |
 | `settings.py` | `Settings` pydantic-settings model, `Aggregation` model, focus texts, default aggregations ([src/news/settings.py:8-69](../src/news/settings.py#L8-L69)) |

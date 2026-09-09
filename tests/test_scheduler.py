@@ -1,9 +1,9 @@
 import asyncio
 import inspect
-from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
@@ -57,7 +57,7 @@ async def test_lifespan_missing_env_raises_validation_error(
             pass
 
 
-async def test_lifespan_starts_scheduler_with_interval_job(
+async def test_lifespan_starts_scheduler_with_cron_job(
     set_env: None,
 ) -> None:
     # Arrange
@@ -71,7 +71,12 @@ async def test_lifespan_starts_scheduler_with_interval_job(
         # Assert
         assert scheduler.running is True
         assert job is not None
-        assert job.trigger.interval == timedelta(hours=12)
+        assert isinstance(job.trigger, CronTrigger)
+        assert str(job.trigger) == (
+            "cron[month='*', day='*', day_of_week='*', "
+            "hour='7,12,17', minute='0']"
+        )
+        assert str(job.trigger.timezone) == "America/Los_Angeles"
         assert job.max_instances == 1
         assert job.coalesce is True
         assert inspect.iscoroutinefunction(job.func)

@@ -7,7 +7,7 @@ Pytest suite in `tests/` with `asyncio_mode = "auto"`, module-scoped event loop,
 - [test_init.py](../tests/test_init.py) - CLI: argument parsing defaults/overrides/errors, logging configuration, Uvicorn log config, `main()` dispatch to server vs aggregate
 - [test_settings.py](../tests/test_settings.py) - Settings loading from environment and `.env`, required-field validation, environment-over-dotenv precedence
 - [test_server.py](../tests/test_server.py) - `run_aggregate` wiring; `GET/POST /aggregate` status, reschedule, and 503 paths; home page rendering, static assets, HTML 404, OpenAPI visibility, `/docs` endpoints
-- [test_scheduler.py](../tests/test_scheduler.py) - App creation without credentials, lifespan validation errors, interval job options (`max_instances`, `coalesce`), scheduler start/shutdown lifecycle
+- [test_scheduler.py](../tests/test_scheduler.py) - App creation without credentials, lifespan validation errors, cron job options (`max_instances`, `coalesce`), scheduler start/shutdown lifecycle
 - [test_miniflux_client.py](../tests/test_miniflux_client.py) - Category lookup and auth header, entry mapping, pagination, response validation, retry/give-up on transient HTTP errors, factory context manager (uses `httpx.MockTransport`)
 - [test_llm_client.py](../tests/test_llm_client.py) - `chat` and `chat_parsed` results, retry on rate limits, reraise after exhaustion, non-transient errors not retried, factory cleanup
 - [test_service.py](../tests/test_service.py) - Largest suite: HTML stripping, fetch window/limit, refinement link matching and failure isolation, concurrency order, digest writing, full pipeline happy/partial/empty/failure paths (grouping injected as a `FakeGrouping`), multi-aggregation sequencing

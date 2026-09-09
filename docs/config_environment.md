@@ -1,6 +1,6 @@
 # Configuration & Environment
 
-All configuration is defined in `Settings` (pydantic-settings `BaseSettings`, loads `.env`, process environment overrides take precedence) at [src/news/settings.py:49-77](../src/news/settings.py#L49-L77). #config #environment
+All configuration is defined in `Settings` (pydantic-settings `BaseSettings`, loads `.env`, process environment overrides take precedence) at [src/news/settings.py:49-78](../src/news/settings.py#L49-L78). #config #environment
 
 ## Required Variables #config #env
 
@@ -34,7 +34,8 @@ All configuration is defined in `Settings` (pydantic-settings `BaseSettings`, lo
 | `RETRY_ATTEMPTS` #env | int | `3` | Declared retry attempt count ([settings.py:66](../src/news/settings.py#L66)) |
 | `RETRY_MIN_WAIT_S` #env | int | `2` | Declared minimum retry wait ([settings.py:67](../src/news/settings.py#L67)) |
 | `RETRY_MAX_WAIT_S` #env | int | `30` | Declared maximum retry wait ([settings.py:68](../src/news/settings.py#L68)) |
-| `SCHEDULE_INTERVAL_HOURS` #env | int | `12` | Interval between scheduled pipeline runs ([settings.py:69](../src/news/settings.py#L69)) |
+| `SCHEDULE_CRON` #env | crontab expression | `0 7,12,17 * * *` | Crontab expression (minute hour day month weekday) for scheduled pipeline runs — default 7AM, 12PM, and 5PM ([settings.py:77](../src/news/settings.py#L77)) |
+| `SCHEDULE_TIMEZONE` #env | IANA timezone | `America/Los_Angeles` | Timezone the cron schedule is evaluated in ([settings.py:78](../src/news/settings.py#L78)) |
 
 Note: the clients currently use their own constructor defaults for retry parameters, which match the settings defaults ([llm_client.py:31-33](../src/news/digest/llm_client.py#L31-L33), [miniflux_client.py:35-38](../src/news/digest/miniflux_client.py#L35-L38)).
 

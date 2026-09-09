@@ -2,7 +2,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI
 
 from news.digest.grouping import LlmGrouping
@@ -23,7 +23,9 @@ def build_scheduler(
     service = DigestService(settings, miniflux, llm, grouping)
     scheduler.add_job(
         service.__call__,
-        IntervalTrigger(hours=settings.schedule_interval_hours),
+        CronTrigger.from_crontab(
+            settings.schedule_cron, settings.schedule_timezone
+        ),
         id=NEWS_DIGEST_JOB_ID,
         max_instances=1,
         coalesce=True,
