@@ -74,7 +74,7 @@ Datasets live in [tests/evaluation/data/](../tests/evaluation/data/) and are dis
 | File | Contents |
 |---|---|
 | `rss_entries_<date>_<category>.json` | Frozen `RssEntry` lists captured from Miniflux (id, title, link, content, published_at, source — schema at [src/news/digest/schemas.py:6-12](../src/news/digest/schemas.py#L6-L12)) |
-| `expected_groups_<id>.json` | Human-verified groups: `{title, links[]}` per trending event |
+| `expected_groups_<id>.yaml` | Human-verified groups: `{title, entries: [{title, link}]}` per trending event |
 | `expected_summaries_<id>.json` | Human-written reference summaries keyed by the expected group title: `{title, summary}` |
 
 Currently available datasets:
@@ -90,7 +90,7 @@ Only `2026_07_22_Economy` has expected data, so grouping tests run for all disco
 
 ## Dataset Capture Utility #evaluation
 
-[capture_dataset.py](../tests/evaluation/capture_dataset.py) freezes a new RSS snapshot: it builds a real `MinifluxClient` and calls `DigestService.fetch_entries` for a category and date, then writes `data/rss_entries_<YYYY_MM_DD>_<category>.json` ([capture_dataset.py:21-41](../tests/evaluation/capture_dataset.py#L21-L41), [capture_dataset.py:61-80](../tests/evaluation/capture_dataset.py#L61-L80)). CLI options: `--category` (`news` | `Economy` | `Technology`, default `news`) and `--date` (`YYYY-MM-DD`, default today) ([capture_dataset.py:44-58](../tests/evaluation/capture_dataset.py#L44-L58)). The script is unit-tested with a mocked service in [tests/evaluation/test_capture_dataset.py](../tests/evaluation/test_capture_dataset.py). Expected groups/summaries for a new dataset must be authored by hand following the JSON shapes above.
+[capture_dataset.py](../tests/evaluation/capture_dataset.py) freezes a new RSS snapshot: it builds a real `MinifluxClient` and calls `DigestService.fetch_entries` for a category and date, then writes `data/rss_entries_<YYYY_MM_DD>_<category>.json` ([capture_dataset.py:21-41](../tests/evaluation/capture_dataset.py#L21-L41), [capture_dataset.py:61-80](../tests/evaluation/capture_dataset.py#L61-L80)). CLI options: `--category` (`news` | `Economy` | `Technology`, default `news`) and `--date` (`YYYY-MM-DD`, default today) ([capture_dataset.py:44-58](../tests/evaluation/capture_dataset.py#L44-L58)). The script is unit-tested with a mocked service in [tests/evaluation/test_capture_dataset.py](../tests/evaluation/test_capture_dataset.py). Expected groups/summaries for a new dataset must be authored by hand following the shapes above (groups as YAML, summaries as JSON).
 
 ## Fixtures and Execution Model #evaluation
 

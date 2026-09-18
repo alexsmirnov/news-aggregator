@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import openai
 import pytest
 import pytest_asyncio
+import yaml
 from deepeval.models import GPTModel
 from pydantic import ValidationError
 
@@ -91,7 +92,7 @@ def frozen_entries(dataset_id: str) -> list[RssEntry]:
 
 @pytest.fixture(scope="package")
 def expected_groups(dataset_id: str) -> list[dict[str, object]]:
-    return _load_required_data(f"expected_groups_{dataset_id}.json")
+    return _load_required_data(f"expected_groups_{dataset_id}.yaml")
 
 
 @pytest.fixture(scope="package")
@@ -179,4 +180,4 @@ def _load_required_data(filename: str) -> list[dict[str, object]]:
     path = DATA_DIR / filename
     if not path.exists():
         pytest.skip(f"frozen evaluation data missing: {path}")
-    return _load_json(path)
+    return yaml.safe_load(path.read_text())

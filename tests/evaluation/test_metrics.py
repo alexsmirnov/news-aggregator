@@ -87,7 +87,13 @@ def test_match_groups_pairs_by_link_overlap() -> None:
 
 def test_links_extracts_link_set() -> None:
     # Arrange
-    group = {"title": "T", "links": ["http://a", "http://b"]}
+    group = {
+        "title": "T",
+        "entries": [
+            {"title": "A", "link": "http://a"},
+            {"title": "B", "link": "http://b"},
+        ],
+    }
 
     # Act
     result = links(group)
@@ -96,9 +102,15 @@ def test_links_extracts_link_set() -> None:
     assert result == {"http://a", "http://b"}
 
 
-def test_links_rejects_non_string_list() -> None:
+def test_links_rejects_non_string_link() -> None:
     # Arrange
-    group = {"title": "T", "links": ["http://a", 1]}
+    group = {
+        "title": "T",
+        "entries": [
+            {"title": "A", "link": "http://a"},
+            {"title": "B", "link": 1},
+        ],
+    }
 
     # Act / Assert
     with pytest.raises(ValueError):
