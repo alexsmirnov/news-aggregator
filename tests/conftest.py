@@ -176,5 +176,6 @@ def settings_stub(tmp_path: Path) -> Settings:
             model_refinement="gemini-flash",
             model_embedding="bge-embed",
             embedding_dimensions=1024,
+            schedule_timezone="America/Los_Angeles",
         ),
     )

@@ -1,7 +1,8 @@
 import asyncio
 import logging
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import aiofiles
 from bs4 import BeautifulSoup
@@ -297,7 +298,7 @@ class DigestService:
         )
 
     async def __call__(self) -> list[Path]:
-        now = datetime.now(UTC)
+        now = datetime.now(ZoneInfo(self.settings.schedule_timezone))
         logger.info(
             "starting digest service aggregations_count=%s",
             len(self.settings.aggregations)
