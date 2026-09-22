@@ -1,5 +1,6 @@
 import logging
 from collections import Counter
+from datetime import timedelta
 from pathlib import Path
 
 import numpy as np
@@ -29,21 +30,31 @@ async def test_cluster_eval_writes_inspectable_yaml(
         )
     )
     grouping = MapReduceGrouping(eval_settings, llm)
+    sorted_entries = MapReduceGrouping.sort_by_published_at(frozen_entries)
+    baseline_cut, clustering_cut = MapReduceGrouping.split_offsets(
+        sorted_entries,
+        timedelta(hours=eval_settings.grouping_window_hours),
+    )
 
     # Act
     try:
-        embedded = await grouping.embed_entries(frozen_entries)
+        embedded = await grouping.embed_entries(sorted_entries)
     finally:
         await llm.aclose()
-    vectors = np.asarray(
-        [entry.content_vector for entry in embedded], dtype=np.float64
+    vectors_all = np.asarray(
+        [entry.vector for entry in embedded], dtype=np.float64
     )
-    for sigma in [2.7, 2.8, 2.9, 3.0, 3.1, 3.2]:
+    baseline_vectors = vectors_all[:baseline_cut]
+    clustering_entries = sorted_entries[clustering_cut:]
+    vectors = vectors_all[clustering_cut:]
+    for sigma in [2.5, 3.0, 3.5, 2.0]:
         threshold = MapReduceGrouping.calibrate_threshold(
-            vectors, n_pairs=10000, k_sigma=sigma
+            vectors, n_pairs=20000, k_sigma=sigma
         )
         labels = MapReduceGrouping.cluster(vectors, threshold)
-    scored = MapReduceGrouping.score_clusters(frozen_entries, labels, vectors)
+    scored = MapReduceGrouping.score_clusters(
+        clustering_entries, labels, vectors, baseline_vectors
+    )
     clusters = [
         {
             **{key: value for key, value in group.items() if key != "records"},
@@ -80,6 +91,8 @@ async def test_cluster_eval_writes_inspectable_yaml(
     assert Counter(
         (entry["title"], entry["link"])
         for group in loaded for entry in group["entries"]
-    ) == Counter((entry.title, entry.link) for entry in frozen_entries)
+    ) == Counter(
+        (entry.title, entry.link) for entry in clustering_entries
+    )
     scores = [group["trend_score"] for group in loaded]
     assert scores == sorted(scores, reverse=True)

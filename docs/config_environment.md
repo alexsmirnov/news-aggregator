@@ -24,6 +24,7 @@ All configuration is defined in `Settings` (pydantic-settings `BaseSettings`, lo
 | `GROUPING_K_SIGMA` #env | float | `3.0` | `MapReduceGrouping` clustering tightness: std devs above the corpus random-pair similarity baseline ([settings.py:64](../src/news/settings.py#L64)) |
 | `GROUPING_MAP_CLUSTERS` #env | int | `40` | `MapReduceGrouping` recall knob: how many top-ranked clusters get a map (titling) LLM call ([settings.py:65](../src/news/settings.py#L65)) |
 | `GROUPING_MAX_RECORDS` #env | int | `20` | `MapReduceGrouping` cost knob: max merged records returned to `refine_all` ([settings.py:66](../src/news/settings.py#L66)) |
+| `GROUPING_WINDOW_HOURS` #env | int | `4` | `MapReduceGrouping` baseline/clustering split width in hours; also extends the Miniflux fetch lookback so baseline data is available ([settings.py:67](../src/news/settings.py#L67)) |
 | `REFINE_MAX_LINKS` #env | int | `10` | Max links passed to the refinement model per group ([settings.py:67](../src/news/settings.py#L67)) |
 | `MODEL_TRENDING` #env | str | `sonar-reasoning-pro` | Trending model name (currently unused by the pipeline) ([settings.py:62](../src/news/settings.py#L62)) |
 | `MODEL_GROUPING` #env | str | `gpt-5-terra` | Model for news grouping ([settings.py:63](../src/news/settings.py#L63)) |

@@ -1,5 +1,6 @@
 import math
 import types
+from datetime import timedelta
 from typing import cast
 
 import numpy as np
@@ -106,7 +107,7 @@ async def test_embed_entries_binds_title_and_content_vectors(
     # Assert
     assert [e.entry for e in embedded] == entries
     assert [e.title_vector for e in embedded] == [[1.0], [1.0]]
-    assert [e.content_vector for e in embedded] == [[1.0], [1.0]]
+    assert [e.vector for e in embedded] == [[1.0], [1.0]]
 
 
 async def test_embed_entries_normalizes_title_and_content_separately(
@@ -124,7 +125,7 @@ async def test_embed_entries_normalizes_title_and_content_separately(
 
     # Assert
     assert [e.title_vector for e in embedded] == [[0.6, 0.8], [1.0, 0.0]]
-    assert [e.content_vector for e in embedded] == [[0.0, 1.0], [0.6, 0.8]]
+    assert [e.vector for e in embedded] == [[0.0, 1.0], [0.6, 0.8]]
 
 
 async def test_embed_entries_leaves_zero_vector_unchanged(
@@ -236,7 +237,7 @@ async def test_call_clusters_embeds_and_titles_each_group(
     ]
     vectors = [[1.0, 0.0], [1.0, 0.0], [0.0, 1.0], [0.0, 1.0]]
     llm = fake_llm(
-        embeddings_results=[vectors + vectors],
+        embeddings_results=[vectors],
         chat_parsed_results=[
             ClusterSummary(title="Group 1", summary="s1"),
             ClusterSummary(title="Group 2", summary="s2"),
@@ -248,7 +249,11 @@ async def test_call_clusters_embeds_and_titles_each_group(
     # not exactly 0. k_sigma=1.0 keeps the threshold a wide, comfortably
     # positive margin between the duplicate pairs (~0) and the orthogonal
     # pairs (1.0).
-    settings = make_settings(settings_stub, grouping_k_sigma=1.0)
+    # grouping_window_hours=0: all entries share one published_at, so a
+    # non-zero window would exclude every entry from the clustering slice.
+    settings = make_settings(
+        settings_stub, grouping_k_sigma=1.0, grouping_window_hours=0
+    )
     grouping = make_grouping(settings, llm)
 
     # Act
@@ -276,11 +281,16 @@ async def test_call_limits_map_calls_to_grouping_map_clusters(
     ]
     vectors = [[1.0, 0.0], [1.0, 0.0], [0.0, 1.0], [0.0, 1.0]]
     llm = fake_llm(
-        embeddings_results=[vectors + vectors],
+        embeddings_results=[vectors],
         chat_parsed_results=[ClusterSummary(title="Top", summary="s")],
     )
+    # grouping_window_hours=0: all entries share one published_at, so a
+    # non-zero window would exclude every entry from the clustering slice.
     settings = make_settings(
-        settings_stub, grouping_map_clusters=1, grouping_k_sigma=1.0
+        settings_stub,
+        grouping_map_clusters=1,
+        grouping_k_sigma=1.0,
+        grouping_window_hours=0,
     )
     grouping = make_grouping(settings, llm)
 
@@ -291,6 +301,52 @@ async def test_call_limits_map_calls_to_grouping_map_clusters(
     assert len(llm.chat_parsed_calls) == 1
     assert len(result) == 1
     assert set(result[0].links) == {entries[2].link, entries[3].link}
+
+
+async def test_call_excludes_baseline_only_entries_from_clustering(
+    settings_stub: Settings, fake_llm: type[FakeLlm]
+) -> None:
+    # Arrange: an entry from 12h ago is outside the 4h clustering window
+    # (settings_stub.grouping_window_hours) but still inside the baseline
+    # window, so it must be embedded (for baseline centroid comparisons)
+    # yet never appear in a returned NewsRecord's links.
+    old_entry = make_entry(
+        1, link="https://old.example/1",
+        published_at="2026-07-16T00:00:00",
+    )
+    recent_a = make_entry(
+        2, link="https://a.example/2",
+        published_at="2026-07-16T06:00:00",
+    )
+    recent_b = make_entry(
+        3, link="https://a.example/3",
+        published_at="2026-07-16T06:00:00",
+    )
+    newest = make_entry(
+        4, link="https://b.example/4",
+        published_at="2026-07-16T12:00:00",
+    )
+    entries = [old_entry, recent_a, recent_b, newest]
+    # Vectors are given in published_at-ascending order (sort_by_published_at
+    # is stable, and these four are already sorted by construction).
+    vectors = [[0.0, 1.0], [1.0, 0.0], [1.0, 0.0], [0.0, 1.0]]
+    llm = fake_llm(
+        embeddings_results=[vectors],
+        chat_parsed_results=[
+            ClusterSummary(title="Recent", summary="s1"),
+            ClusterSummary(title="Newest", summary="s2"),
+        ],
+    )
+    settings = make_settings(settings_stub, grouping_k_sigma=1.0)
+    grouping = make_grouping(settings, llm)
+
+    # Act
+    result = await grouping(entries, focus="FOCUS")
+
+    # Assert
+    all_links = {link for record in result for link in record.links}
+    assert old_entry.link not in all_links
+    assert all_links == {recent_a.link, recent_b.link, newest.link}
 
 
 def test_merge_batch_unions_links_across_merged_clusters() -> None:
@@ -423,6 +479,64 @@ async def test_reduce_level_raises_pipeline_error_on_empty_response(
     # Act / Assert
     with pytest.raises(PipelineError):
         await grouping._reduce_level(batch)
+
+
+def test_sort_by_published_at_orders_ascending_and_is_stable() -> None:
+    # Arrange
+    first = make_entry(1, published_at="2026-07-16T09:00:00")
+    tied_a = make_entry(2, published_at="2026-07-16T10:00:00")
+    tied_b = make_entry(3, published_at="2026-07-16T10:00:00")
+    last = make_entry(4, published_at="2026-07-16T11:00:00")
+    entries = [last, tied_a, tied_b, first]
+
+    # Act
+    sorted_entries = MapReduceGrouping.sort_by_published_at(entries)
+
+    # Assert
+    assert sorted_entries == [first, tied_a, tied_b, last]
+
+
+def test_split_offsets_bisects_baseline_and_clustering_windows() -> None:
+    # Arrange: hourly entries 00:00..05:00, window=2h. Baseline keeps
+    # everything up to (last - 2h) = 03:00 inclusive -> indexes 0..3.
+    # Clustering keeps everything from (first + 2h) = 02:00 inclusive
+    # -> indexes 2..5.
+    entries = [
+        make_entry(i, published_at=f"2026-07-16T0{i}:00:00")
+        for i in range(6)
+    ]
+
+    # Act
+    baseline_cut, clustering_cut = MapReduceGrouping.split_offsets(
+        entries, timedelta(hours=2)
+    )
+
+    # Assert
+    assert baseline_cut == 4
+    assert clustering_cut == 2
+
+
+def test_split_offsets_zero_window_keeps_full_range_both_sides() -> None:
+    # Arrange
+    entries = [make_entry(i) for i in range(3)]
+
+    # Act
+    baseline_cut, clustering_cut = MapReduceGrouping.split_offsets(
+        entries, timedelta(hours=0)
+    )
+
+    # Assert
+    assert (baseline_cut, clustering_cut) == (3, 0)
+
+
+def test_split_offsets_empty_input_returns_zero_offsets() -> None:
+    # Act
+    baseline_cut, clustering_cut = MapReduceGrouping.split_offsets(
+        [], timedelta(hours=4)
+    )
+
+    # Assert
+    assert (baseline_cut, clustering_cut) == (0, 0)
 
 
 def test_calibrate_threshold_identical_corpus_is_zero() -> None:

@@ -1,9 +1,10 @@
 import asyncio
 import logging
 import math
+from bisect import bisect_left, bisect_right
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from itertools import batched
 from typing import TypedDict
 from urllib.parse import urlsplit
@@ -76,8 +77,7 @@ class ScoredCluster(TypedDict):
 @dataclass(frozen=True, slots=True)
 class EmbeddedEntry:
     entry: RssEntry
-    title_vector: list[float]
-    content_vector: list[float]
+    vector: list[float]
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,15 +101,25 @@ class MapReduceGrouping:
             len(entries),
             len(focus),
         )
-        embedded = await self.embed_entries(entries)
-        vectors = np.asarray(
-            [entry.content_vector for entry in embedded], dtype=np.float64
+        sorted_entries = self.sort_by_published_at(entries)
+        window = timedelta(hours=self.settings.grouping_window_hours)
+        baseline_cut, clustering_cut = self.split_offsets(
+            sorted_entries, window
         )
+        embedded = await self.embed_entries(sorted_entries)
+        vectors_all = np.asarray(
+            [entry.vector for entry in embedded], dtype=np.float64
+        )
+        baseline_vectors = vectors_all[:baseline_cut]
+        clustering_entries = sorted_entries[clustering_cut:]
+        vectors = vectors_all[clustering_cut:]
         threshold = self.calibrate_threshold(
             vectors, k_sigma=self.settings.grouping_k_sigma
         )
         labels = self.cluster(vectors, threshold)
-        scored = self.score_clusters(entries, labels, vectors)
+        scored = self.score_clusters(
+            clustering_entries, labels, vectors, baseline_vectors
+        )
         selected = scored[: self.settings.grouping_map_clusters]
         logger.info(
             "selected clusters for mapping selected_count=%s "
@@ -292,6 +302,35 @@ class MapReduceGrouping:
         ]
 
     @staticmethod
+    def sort_by_published_at(entries: list[RssEntry]) -> list[RssEntry]:
+        return sorted(
+            entries,
+            key=lambda entry: datetime.fromisoformat(entry.published_at),
+        )
+
+    @staticmethod
+    def split_offsets(
+        sorted_entries: list[RssEntry], window: timedelta
+    ) -> tuple[int, int]:
+        """Index boundaries into a published_at-ascending entry list.
+
+        baseline window = sorted_entries[:baseline_cut] (<= last - window)
+        clustering window = sorted_entries[clustering_cut:] (>= first + window)
+        The two windows overlap; this only computes offsets, no embedding.
+        """
+        if not sorted_entries:
+            # ponytail: no entries means no timestamps to bisect; nothing
+            # to put in either window.
+            return 0, 0
+        stamps = [
+            datetime.fromisoformat(entry.published_at)
+            for entry in sorted_entries
+        ]
+        baseline_cut = bisect_right(stamps, stamps[-1] - window)
+        clustering_cut = bisect_left(stamps, stamps[0] + window)
+        return baseline_cut, clustering_cut
+
+    @staticmethod
     def calibrate_threshold(
         embeddings: NDArray[np.float64],
         *,
@@ -446,17 +485,14 @@ class MapReduceGrouping:
     async def embed_entries(
         self, entries: list[RssEntry]
     ) -> list[EmbeddedEntry]:
-        title_texts = [_embedding_input(entry.title) for entry in entries]
+        # title_texts = [_embedding_input(entry.title) for entry in entries]
         content_texts = [
             _embedding_input(f"{entry.title} {entry.content}", fallback=entry.title)
             for entry in entries
         ]
-        vectors = await self._embed_texts(title_texts + content_texts)
-        title_vectors = [
-            _normalize(vector) for vector in vectors[: len(entries)]
-        ]
-        content_vectors = [
-            _normalize(vector) for vector in vectors[len(entries) :]
+        vectors = await self._embed_texts(content_texts)
+        normalized_vectors = [
+            _normalize(vector) for vector in vectors
         ]
         logger.info(
             "embedded entries entries_count=%s dimensions=%s",
@@ -466,11 +502,10 @@ class MapReduceGrouping:
         return [
             EmbeddedEntry(
                 entry=entry,
-                title_vector=title_vector,
-                content_vector=content_vector,
+                vector=content_vector,
             )
-            for entry, title_vector, content_vector in zip(
-                entries, title_vectors, content_vectors, strict=True
+            for entry, content_vector in zip(
+                entries, normalized_vectors, strict=True
             )
         ]
 

@@ -170,6 +170,7 @@ def settings_stub(tmp_path: Path) -> Settings:
             grouping_k_sigma=3.0,
             grouping_map_clusters=40,
             grouping_max_records=20,
+            grouping_window_hours=4,
             refine_max_links=10,
             model_trending="sonar-reasoning-pro",
             model_grouping="gemini-flash",

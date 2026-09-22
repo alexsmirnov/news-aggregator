@@ -122,7 +122,7 @@ async def test_fetch_entries_maps_and_truncates(
         {
             "category_name": "news",
             "published_after": int(
-                (NOW - timedelta(hours=24)).timestamp()
+                (NOW - timedelta(hours=24 + 4)).timestamp()
             ),
             "published_before": int(NOW.timestamp()),
             "order": "published_at",

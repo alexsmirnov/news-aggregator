@@ -70,7 +70,10 @@ class DigestService:
     ) -> list[RssEntry]:
         published_after = int(
             (
-                now - timedelta(hours=self.settings.fetch_lookback_hours)
+                now - timedelta(
+                    hours=self.settings.fetch_lookback_hours
+                    + self.settings.grouping_window_hours
+                )
             ).timestamp()
         )
         published_before = int(now.timestamp())
