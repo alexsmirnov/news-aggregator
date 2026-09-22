@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 import numpy as np
 from numpy.typing import NDArray
 from sklearn.cluster import AgglomerativeClustering
+from sklearn.preprocessing import normalize
 
 from news.digest.grouping import PipelineError, format_entry
 from news.digest.llm_client import LlmClient
@@ -48,15 +49,6 @@ def _embedding_input(text: str, *, fallback: str = "") -> str:
     return non_empty[:EMBED_MAX_INPUT_CHARS]
 
 
-def _normalize(vector: list[float]) -> list[float]:
-    norm = math.sqrt(sum(component * component for component in vector))
-    if norm == 0:
-        # ponytail: a zero vector has no direction; leave it unchanged
-        # rather than dividing by zero.
-        return vector
-    return [component / norm for component in vector]
-
-
 def _arrival_rate(group: list[RssEntry], floor_hours: float = 6.0) -> float:
     stamps = [datetime.fromisoformat(record.published_at) for record in group]
     span_hours = (max(stamps) - min(stamps)).total_seconds() / 3600.0
@@ -72,12 +64,6 @@ class ScoredCluster(TypedDict):
     burst_z: float
     novelty: float
     trend_score: float
-
-
-@dataclass(frozen=True, slots=True)
-class EmbeddedEntry:
-    entry: RssEntry
-    vector: list[float]
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,10 +92,7 @@ class MapReduceGrouping:
         baseline_cut, clustering_cut = self.split_offsets(
             sorted_entries, window
         )
-        embedded = await self.embed_entries(sorted_entries)
-        vectors_all = np.asarray(
-            [entry.vector for entry in embedded], dtype=np.float64
-        )
+        vectors_all = await self.embed_entries(sorted_entries)
         baseline_vectors = vectors_all[:baseline_cut]
         clustering_entries = sorted_entries[clustering_cut:]
         vectors = vectors_all[clustering_cut:]
@@ -457,9 +440,10 @@ class MapReduceGrouping:
             burst_z = (rates[label] - mean_rate) / std_rate
             novelty = 1.0
             if baseline_embeddings is not None and len(baseline_embeddings):
-                centroid = _normalize(
-                    embeddings[indices].mean(axis=0).tolist()
-                )
+                centroid = normalize(
+                    embeddings[indices].mean(axis=0).reshape(1, -1),
+                    norm="l2",
+                )[0]
                 similarity = float((baseline_embeddings @ centroid).max())
                 novelty = 1.0 - min(max(similarity, -1.0), 1.0)
             trend = (
@@ -484,30 +468,29 @@ class MapReduceGrouping:
 
     async def embed_entries(
         self, entries: list[RssEntry]
-    ) -> list[EmbeddedEntry]:
-        # title_texts = [_embedding_input(entry.title) for entry in entries]
+    ) -> NDArray[np.float64]:
+        """Rows aligned with `entries`, L2-normalized so dot product ==
+        cosine similarity (the precondition `calibrate_threshold` and
+        `cluster` require).
+        """
+        if not entries:
+            # ponytail: sklearn's normalize rejects 0 samples.
+            return np.zeros(
+                (0, self.settings.embedding_dimensions), dtype=np.float64
+            )
         content_texts = [
-            _embedding_input(f"{entry.title} {entry.content}", fallback=entry.title)
+            _embedding_input(
+                f"{entry.title}\n\n{entry.content}", fallback=entry.title
+            )
             for entry in entries
         ]
         vectors = await self._embed_texts(content_texts)
-        normalized_vectors = [
-            _normalize(vector) for vector in vectors
-        ]
         logger.info(
             "embedded entries entries_count=%s dimensions=%s",
             len(entries),
             self.settings.embedding_dimensions,
         )
-        return [
-            EmbeddedEntry(
-                entry=entry,
-                vector=content_vector,
-            )
-            for entry, content_vector in zip(
-                entries, normalized_vectors, strict=True
-            )
-        ]
+        return normalize(vectors, norm="l2")  # type: ignore[return-value]
 
     async def _embed_with_limit(
         self, batch: list[str], semaphore: asyncio.Semaphore

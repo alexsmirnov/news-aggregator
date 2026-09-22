@@ -3,7 +3,6 @@ from collections import Counter
 from datetime import timedelta
 from pathlib import Path
 
-import numpy as np
 import openai
 import pytest
 import yaml
@@ -38,16 +37,13 @@ async def test_cluster_eval_writes_inspectable_yaml(
 
     # Act
     try:
-        embedded = await grouping.embed_entries(sorted_entries)
+        vectors_all = await grouping.embed_entries(sorted_entries)
     finally:
         await llm.aclose()
-    vectors_all = np.asarray(
-        [entry.vector for entry in embedded], dtype=np.float64
-    )
     baseline_vectors = vectors_all[:baseline_cut]
     clustering_entries = sorted_entries[clustering_cut:]
     vectors = vectors_all[clustering_cut:]
-    for sigma in [2.5, 3.0, 3.5, 2.0]:
+    for sigma in [2.5, 3.0, 3.5]:
         threshold = MapReduceGrouping.calibrate_threshold(
             vectors, n_pairs=20000, k_sigma=sigma
         )

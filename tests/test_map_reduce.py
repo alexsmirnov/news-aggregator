@@ -86,7 +86,7 @@ def make_candidate(
     )
 
 
-async def test_embed_entries_binds_title_and_content_vectors(
+async def test_embed_entries_returns_normalized_matrix_in_entry_order(
     settings_stub: Settings, fake_llm: type[FakeLlm]
 ) -> None:
     # Arrange
@@ -94,38 +94,15 @@ async def test_embed_entries_binds_title_and_content_vectors(
         make_entry(1, title="T1", content="C1"),
         make_entry(2, title="T2", content="C2"),
     ]
-    title_vectors = [[1.0], [2.0]]
-    content_vectors = [[10.0], [20.0]]
-    llm = fake_llm(
-        embeddings_results=[title_vectors + content_vectors]
-    )
+    llm = fake_llm(embeddings_results=[[[3.0, 4.0], [1.0, 0.0]]])
     grouping = make_grouping(settings_stub, llm)
 
     # Act
-    embedded = await grouping.embed_entries(entries)
+    vectors = await grouping.embed_entries(entries)
 
     # Assert
-    assert [e.entry for e in embedded] == entries
-    assert [e.title_vector for e in embedded] == [[1.0], [1.0]]
-    assert [e.vector for e in embedded] == [[1.0], [1.0]]
-
-
-async def test_embed_entries_normalizes_title_and_content_separately(
-    settings_stub: Settings, fake_llm: type[FakeLlm]
-) -> None:
-    # Arrange
-    entries = [make_entry(1), make_entry(2)]
-    title_vectors = [[3.0, 4.0], [1.0, 0.0]]
-    content_vectors = [[0.0, 5.0], [6.0, 8.0]]
-    llm = fake_llm(embeddings_results=[title_vectors + content_vectors])
-    grouping = make_grouping(settings_stub, llm)
-
-    # Act
-    embedded = await grouping.embed_entries(entries)
-
-    # Assert
-    assert [e.title_vector for e in embedded] == [[0.6, 0.8], [1.0, 0.0]]
-    assert [e.vector for e in embedded] == [[0.0, 1.0], [0.6, 0.8]]
+    assert vectors.dtype == np.float64
+    np.testing.assert_allclose(vectors, [[0.6, 0.8], [1.0, 0.0]])
 
 
 async def test_embed_entries_leaves_zero_vector_unchanged(
@@ -133,14 +110,29 @@ async def test_embed_entries_leaves_zero_vector_unchanged(
 ) -> None:
     # Arrange
     entries = [make_entry(1)]
-    llm = fake_llm(embeddings_results=[[[0.0, 0.0], [1.0, 0.0]]])
+    llm = fake_llm(embeddings_results=[[[0.0, 0.0]]])
     grouping = make_grouping(settings_stub, llm)
 
     # Act
-    embedded = await grouping.embed_entries(entries)
+    vectors = await grouping.embed_entries(entries)
 
     # Assert
-    assert embedded[0].title_vector == [0.0, 0.0]
+    np.testing.assert_allclose(vectors, [[0.0, 0.0]])
+
+
+async def test_embed_entries_empty_input_returns_empty_matrix_without_llm_call(
+    settings_stub: Settings, fake_llm: type[FakeLlm]
+) -> None:
+    # Arrange
+    llm = fake_llm()
+    grouping = make_grouping(settings_stub, llm)
+
+    # Act
+    vectors = await grouping.embed_entries([])
+
+    # Assert
+    assert vectors.shape == (0, settings_stub.embedding_dimensions)
+    assert llm.embeddings_calls == []
 
 
 async def test_embed_entries_batches_by_size_and_stays_under_limit(
@@ -149,15 +141,11 @@ async def test_embed_entries_batches_by_size_and_stays_under_limit(
     # Arrange
     entry_count = EMBED_BATCH_SIZE + 1
     entries = [make_entry(i) for i in range(entry_count)]
-    total_texts = 2 * entry_count
-    expected_batches = math.ceil(total_texts / EMBED_BATCH_SIZE)
+    expected_batches = math.ceil(entry_count / EMBED_BATCH_SIZE)
     llm = fake_llm(
         embeddings_results=[
-            [[float(i)] for i in range(len(batch))]
-            for batch in (
-                range(min(EMBED_BATCH_SIZE, total_texts - start))
-                for start in range(0, total_texts, EMBED_BATCH_SIZE)
-            )
+            [[1.0] for _ in range(min(EMBED_BATCH_SIZE, entry_count - start))]
+            for start in range(0, entry_count, EMBED_BATCH_SIZE)
         ]
     )
     grouping = make_grouping(settings_stub, llm)
@@ -179,7 +167,7 @@ async def test_embed_entries_truncates_long_content(
     # Arrange
     long_content = "x" * (EMBED_MAX_INPUT_TOKENS * 10)
     entries = [make_entry(1, content=long_content)]
-    llm = fake_llm(embeddings_results=[[[1.0], [2.0]]])
+    llm = fake_llm(embeddings_results=[[[1.0]]])
     grouping = make_grouping(settings_stub, llm)
 
     # Act
@@ -187,7 +175,7 @@ async def test_embed_entries_truncates_long_content(
 
     # Assert
     _, inputs, _ = llm.embeddings_calls[0]
-    assert len(inputs[1]) == EMBED_MAX_INPUT_TOKENS * 4
+    assert len(inputs[0]) == EMBED_MAX_INPUT_TOKENS * 4
 
 
 async def test_embed_entries_falls_back_to_title_for_empty_content(
@@ -195,7 +183,7 @@ async def test_embed_entries_falls_back_to_title_for_empty_content(
 ) -> None:
     # Arrange
     entries = [make_entry(1, title="Only title", content="   ")]
-    llm = fake_llm(embeddings_results=[[[1.0], [2.0]]])
+    llm = fake_llm(embeddings_results=[[[1.0]]])
     grouping = make_grouping(settings_stub, llm)
 
     # Act
@@ -203,7 +191,7 @@ async def test_embed_entries_falls_back_to_title_for_empty_content(
 
     # Assert
     _, inputs, _ = llm.embeddings_calls[0]
-    assert inputs[1] == "Only title"
+    assert inputs[0] == "Only title"
 
 
 async def test_embed_entries_falls_back_to_sentinel_when_both_blank(
@@ -211,7 +199,7 @@ async def test_embed_entries_falls_back_to_sentinel_when_both_blank(
 ) -> None:
     # Arrange
     entries = [make_entry(1, title="   ", content="   ")]
-    llm = fake_llm(embeddings_results=[[[1.0], [2.0]]])
+    llm = fake_llm(embeddings_results=[[[1.0]]])
     grouping = make_grouping(settings_stub, llm)
 
     # Act
@@ -219,7 +207,7 @@ async def test_embed_entries_falls_back_to_sentinel_when_both_blank(
 
     # Assert
     _, inputs, _ = llm.embeddings_calls[0]
-    assert inputs == ["(empty)", "(empty)"]
+    assert inputs == ["(empty)"]
 
 
 async def test_call_clusters_embeds_and_titles_each_group(
