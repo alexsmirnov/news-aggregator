@@ -24,19 +24,8 @@ class NewsResponse(BaseModel):
 class ClusterSummary(BaseModel):
     title: str = Field(description="combined news headline, in English")
     summary: str = Field(description="one to two sentence synthesis")
-
-
-class MergedGroup(BaseModel):
-    title: str = Field(description="combined news headline, in English")
-    summary: str = Field(description="one to two sentence synthesis")
-    member_indexes: list[int] = Field(
-        description="1-based indexes of the input entries this group merges"
-    )
-
-
-class MergeResponse(BaseModel):
-    groups: list[MergedGroup] = Field(
-        description="entries merged by shared real-world event"
+    entities: list[str] = Field(
+        description="named people, organizations and locations, in English"
     )
 
 

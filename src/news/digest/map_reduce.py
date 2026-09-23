@@ -6,7 +6,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from itertools import batched
-from typing import TypedDict
+from typing import NamedTuple, TypedDict
 from urllib.parse import urlsplit
 
 import numpy as np
@@ -14,20 +14,13 @@ from numpy.typing import NDArray
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.preprocessing import normalize
 
-from news.digest.grouping import PipelineError, format_entry
+from news.digest.grouping import format_entry
 from news.digest.llm_client import LlmClient
 from news.digest.prompts import (
     cluster_summary_system_prompt,
     cluster_summary_user_prompt,
-    merge_system_prompt,
-    merge_user_prompt,
 )
-from news.digest.schemas import (
-    ClusterSummary,
-    MergeResponse,
-    NewsRecord,
-    RssEntry,
-)
+from news.digest.schemas import ClusterSummary, NewsRecord, RssEntry
 from news.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -38,7 +31,6 @@ EMBED_MAX_INPUT_CHARS = EMBED_MAX_INPUT_TOKENS * CHARS_PER_TOKEN
 EMBED_BATCH_SIZE = 64
 MAX_CONCURRENT_EMBED_REQUESTS = 8
 MAX_CONCURRENT_MAP_CALLS = 8
-REDUCE_BATCH_SIZE = 8
 MAX_COSINE_DISTANCE = 2.0
 
 
@@ -55,8 +47,15 @@ def _arrival_rate(group: list[RssEntry], floor_hours: float = 6.0) -> float:
     return len(group) / max(span_hours, floor_hours)
 
 
-class ScoredCluster(TypedDict):
-    records: list[RssEntry]
+class RateBaseline(NamedTuple):
+    """Arrival-rate scale shared by first-pass scoring and fragment
+    re-scoring, so a merged event is ranked on the same burst scale."""
+
+    mean: float
+    std: float
+
+
+class ClusterMetrics(TypedDict):
     size: int
     unique_domains: int
     source_entropy: float
@@ -66,11 +65,18 @@ class ScoredCluster(TypedDict):
     trend_score: float
 
 
+class ScoredCluster(ClusterMetrics):
+    records: list[RssEntry]
+    indices: list[int]
+
+
 @dataclass(frozen=True, slots=True)
 class Candidate:
     title: str
     summary: str
+    entities: tuple[str, ...]
     entries: tuple[RssEntry, ...]
+    indices: tuple[int, ...]
     trend_score: float
 
 
@@ -103,6 +109,9 @@ class MapReduceGrouping:
         scored = self.score_clusters(
             clustering_entries, labels, vectors, baseline_vectors
         )
+        # ponytail: recomputes the O(n) rate baseline score_clusters already
+        # derived, keeping score_clusters' return type stable for callers.
+        rate = self.rate_baseline(clustering_entries, labels)
         selected = scored[: self.settings.grouping_map_clusters]
         logger.info(
             "selected clusters for mapping selected_count=%s "
@@ -111,9 +120,11 @@ class MapReduceGrouping:
             len(scored),
         )
         candidates = await self._map_clusters(selected, focus)
-        collapsed = await self._collapse(candidates)
+        merged = await self._merge_fragments(
+            candidates, vectors, rate, baseline_vectors
+        )
         records = self._to_news_records(
-            collapsed, self.settings.grouping_max_records
+            merged, self.settings.grouping_max_records
         )
         logger.info(
             "map-reduce grouping completed records_count=%s", len(records)
@@ -159,17 +170,15 @@ class MapReduceGrouping:
                     exc_info=True,
                 )
         if parsed is None:
-            fallback_entry = cluster["records"][0]
-            return Candidate(
-                title=fallback_entry.title,
-                summary="",
-                entries=tuple(cluster["records"]),
-                trend_score=cluster["trend_score"],
+            parsed = ClusterSummary(
+                title=cluster["records"][0].title, summary="", entities=[]
             )
         return Candidate(
             title=parsed.title,
             summary=parsed.summary,
+            entities=tuple(parsed.entities),
             entries=tuple(cluster["records"]),
+            indices=tuple(cluster["indices"]),
             trend_score=cluster["trend_score"],
         )
 
@@ -186,86 +195,78 @@ class MapReduceGrouping:
             )
         )
 
-    @staticmethod
-    def _merge_batch(
-        batch: list[Candidate], response: MergeResponse
+    async def _merge_fragments(
+        self,
+        candidates: list[Candidate],
+        vectors: NDArray[np.float64],
+        rate: RateBaseline,
+        baseline_vectors: NDArray[np.float64] | None = None,
     ) -> list[Candidate]:
-        merged: list[Candidate] = []
-        referenced: set[int] = set()
-        for group in response.groups:
-            valid_indexes = [
-                index
-                for index in group.member_indexes
-                if 1 <= index <= len(batch)
-            ]
-            members = [batch[index - 1] for index in valid_indexes]
-            if not members:
-                continue
-            referenced.update(valid_indexes)
-            entries_by_link: dict[str, RssEntry] = {}
-            for candidate in members:
-                for entry in candidate.entries:
-                    entries_by_link.setdefault(entry.link, entry)
-            merged.append(Candidate(
-                title=group.title,
-                summary=group.summary,
-                entries=tuple(entries_by_link.values()),
-                trend_score=max(c.trend_score for c in members),
-            ))
-        leftovers = [
-            candidate
-            for index, candidate in enumerate(batch, start=1)
-            if index not in referenced
-        ]
-        return merged + leftovers
+        """Second clustering pass over the map summaries, in Python.
 
-    async def _reduce_one_batch(
-        self, batch: list[Candidate]
-    ) -> list[Candidate]:
-        numbered = "\n---\n".join(
-            f"# Entity {index}\nTitle: {candidate.title}\n"
-            f"Summary: {candidate.summary}\n"
-            for index, candidate in enumerate(batch, start=1)
-        )
-        response = await self.llm.chat_parsed(
-            self.settings.model_grouping,
-            [
-                {"role": "system", "content": merge_system_prompt()},
-                {"role": "user", "content": merge_user_prompt(numbered)},
-            ],
-            response_format=MergeResponse,
-            reasoning_effort="medium",
-            temperature=0.1,
-        )
-        if response is None:
-            logger.warning("merge query returned empty content")
-            raise PipelineError("merge query returned no content")
-        return self._merge_batch(batch, response)
-
-    async def _reduce_level(self, level: list[Candidate]) -> list[Candidate]:
-        batches = [list(batch) for batch in batched(level, REDUCE_BATCH_SIZE)]
-        merged_batches = await asyncio.gather(
-            *(self._reduce_one_batch(batch) for batch in batches)
-        )
-        return [candidate for batch in merged_batches for candidate in batch]
-
-    async def _collapse(self, level: list[Candidate]) -> list[Candidate]:
-        while len(level) > REDUCE_BATCH_SIZE:
-            next_level = await self._reduce_level(level)
-            logger.info(
-                "reduce pass completed previous_count=%s next_count=%s",
-                len(level),
-                len(next_level),
+        Summaries strip outlet framing and boilerplate that split one
+        event's coverage in article-embedding space, so fragments the
+        first pass left apart meet here. Pairwise "same event" decisions
+        stay out of the LLM. `vectors` are the article vectors that
+        `Candidate.indices` point into.
+        """
+        if not candidates:
+            # ponytail: sklearn's normalize rejects 0 samples.
+            return []
+        texts = [
+            _embedding_input(
+                f"{c.title} {' '.join(c.entities)} {c.summary}",
+                fallback=c.title,
             )
-            if len(next_level) >= len(level):
-                logger.warning(
-                    "reduce pass did not shrink level, stopping "
-                    "level_count=%s",
-                    len(level),
-                )
-                break
-            level = next_level
-        return level
+            for c in candidates
+        ]
+        summary_vectors = normalize(await self._embed_texts(texts), norm="l2")
+        labels = self.cluster(
+            summary_vectors,  # type: ignore[arg-type]
+            self.settings.grouping_merge_distance,
+        )
+        buckets: dict[int, list[Candidate]] = {}
+        for candidate, label in zip(candidates, labels, strict=True):
+            buckets.setdefault(int(label), []).append(candidate)
+        merged = [
+            self._merge_candidates(bucket, vectors, rate, baseline_vectors)
+            for bucket in buckets.values()
+        ]
+        logger.info(
+            "merged fragments candidates_count=%s merged_count=%s "
+            "merge_distance=%.4f",
+            len(candidates),
+            len(merged),
+            self.settings.grouping_merge_distance,
+        )
+        return merged
+
+    @staticmethod
+    def _merge_candidates(
+        bucket: list[Candidate],
+        vectors: NDArray[np.float64],
+        rate: RateBaseline,
+        baseline_vectors: NDArray[np.float64] | None = None,
+    ) -> Candidate:
+        """Fold same-event candidates into one, re-scored from the pooled
+        records rather than combined from the parts' scores. First-pass
+        clusters partition the entries, so concatenation cannot duplicate
+        a link.
+        """
+        lead = max(bucket, key=lambda candidate: len(candidate.summary))
+        entries = tuple(entry for c in bucket for entry in c.entries)
+        indices = tuple(index for c in bucket for index in c.indices)
+        metrics = MapReduceGrouping.compute_metrics(
+            list(entries), vectors[list(indices)], rate, baseline_vectors
+        )
+        return Candidate(
+            title=lead.title,
+            summary=lead.summary,
+            entities=tuple(sorted({e for c in bucket for e in c.entities})),
+            entries=entries,
+            indices=indices,
+            trend_score=metrics["trend_score"],
+        )
 
     @staticmethod
     def _to_news_records(
@@ -394,6 +395,78 @@ class MapReduceGrouping:
         return labels
 
     @staticmethod
+    def _group_indices(labels: NDArray[np.int64]) -> dict[int, list[int]]:
+        groups: dict[int, list[int]] = {}
+        for index, label in enumerate(labels):
+            groups.setdefault(int(label), []).append(index)
+        return groups
+
+    @staticmethod
+    def rate_baseline(
+        records: list[RssEntry], labels: NDArray[np.int64]
+    ) -> RateBaseline:
+        # ponytail: corpus rates substitute for a previous-window baseline.
+        rate_values = np.fromiter(
+            (
+                _arrival_rate([records[i] for i in indices])
+                for indices in MapReduceGrouping._group_indices(
+                    labels
+                ).values()
+            ),
+            dtype=float,
+        )
+        return RateBaseline(
+            mean=float(rate_values.mean()),
+            std=max(float(rate_values.std()), 1e-6),
+        )
+
+    @staticmethod
+    def compute_metrics(
+        group: list[RssEntry],
+        group_vectors: NDArray[np.float64],
+        rate: RateBaseline,
+        baseline_embeddings: NDArray[np.float64] | None = None,
+    ) -> ClusterMetrics:
+        """The single definition of the trend score: first-pass clusters
+        and merged fragments are both scored here, never by combining
+        children's scores.
+        """
+        size = len(group)
+        # Unknown hostnames share one bucket, never one per feed title.
+        counts = Counter(
+            urlsplit(record.link).hostname or "" for record in group
+        )
+        entropy = -sum(
+            (count / size) * math.log(count / size)
+            for count in counts.values()
+        )
+        effective_sources = math.exp(entropy)
+        normalized_entropy = entropy / math.log(size) if size > 1 else 0.0
+        burst_z = (_arrival_rate(group) - rate.mean) / rate.std
+        novelty = 1.0
+        if baseline_embeddings is not None and len(baseline_embeddings):
+            centroid = normalize(
+                group_vectors.mean(axis=0).reshape(1, -1), norm="l2"
+            )[0]
+            similarity = float((baseline_embeddings @ centroid).max())
+            novelty = 1.0 - min(max(similarity, -1.0), 1.0)
+        trend = (
+            (1.0 + max(burst_z, 0.0))
+            * (0.5 + normalized_entropy)
+            * math.log1p(effective_sources)
+            * (0.5 + novelty)
+        )
+        return ClusterMetrics(
+            size=size,
+            unique_domains=len(counts),
+            source_entropy=round(entropy, 3),
+            effective_sources=round(effective_sources, 2),
+            burst_z=round(burst_z, 2),
+            novelty=round(novelty, 3),
+            trend_score=round(trend, 3),
+        )
+
+    @staticmethod
     def score_clusters(
         records: list[RssEntry],
         labels: NDArray[np.int64],
@@ -410,58 +483,20 @@ class MapReduceGrouping:
             raise ValueError("Records, labels and embeddings must be aligned")
         if not records:
             return []
-
-        groups: dict[int, list[int]] = {}
-        for index, label in enumerate(labels):
-            groups.setdefault(int(label), []).append(index)
-        rates = {
-            label: _arrival_rate([records[i] for i in indices])
-            for label, indices in groups.items()
-        }
-        # ponytail: corpus rates substitute for a previous-window baseline.
-        rate_values = np.fromiter(rates.values(), dtype=float)
-        mean_rate = float(rate_values.mean())
-        std_rate = max(float(rate_values.std()), 1e-6)
-
-        scored: list[ScoredCluster] = []
-        for label, indices in groups.items():
-            group = [records[i] for i in indices]
-            size = len(group)
-            # Unknown hostnames share one bucket, never one per feed title.
-            counts = Counter(
-                urlsplit(record.link).hostname or "" for record in group
+        rate = MapReduceGrouping.rate_baseline(records, labels)
+        scored = [
+            ScoredCluster(
+                records=[records[i] for i in indices],
+                indices=indices,
+                **MapReduceGrouping.compute_metrics(
+                    [records[i] for i in indices],
+                    embeddings[indices],
+                    rate,
+                    baseline_embeddings,
+                ),
             )
-            entropy = -sum(
-                (count / size) * math.log(count / size)
-                for count in counts.values()
-            )
-            effective_sources = math.exp(entropy)
-            normalized_entropy = entropy / math.log(size) if size > 1 else 0.0
-            burst_z = (rates[label] - mean_rate) / std_rate
-            novelty = 1.0
-            if baseline_embeddings is not None and len(baseline_embeddings):
-                centroid = normalize(
-                    embeddings[indices].mean(axis=0).reshape(1, -1),
-                    norm="l2",
-                )[0]
-                similarity = float((baseline_embeddings @ centroid).max())
-                novelty = 1.0 - min(max(similarity, -1.0), 1.0)
-            trend = (
-                (1.0 + max(burst_z, 0.0))
-                * (0.5 + normalized_entropy)
-                * math.log1p(effective_sources)
-                * (0.5 + novelty)
-            )
-            scored.append(ScoredCluster(
-                records=group,
-                size=size,
-                unique_domains=len(counts),
-                source_entropy=round(entropy, 3),
-                effective_sources=round(effective_sources, 2),
-                burst_z=round(burst_z, 2),
-                novelty=round(novelty, 3),
-                trend_score=round(trend, 3),
-            ))
+            for indices in MapReduceGrouping._group_indices(labels).values()
+        ]
         return sorted(
             scored, key=lambda group: group["trend_score"], reverse=True
         )
