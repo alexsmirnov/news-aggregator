@@ -1,0 +1,13 @@
+<div id="group-{{ g.index }}" class="ge-block"{% if oob %} hx-swap-oob="{{ oob }}"{% endif %}>
+  <div class="ge-row ge-group" data-row="g:{{ g.index }}" data-group="{{ g.index }}">
+    <span class="ge-caret">▸</span>
+    <kbd>{{ g.key }}</kbd>
+    <span class="ge-title">{{ g.title }}</span>
+    <span class="ge-count">({{ g.members | length }})</span>
+  </div>
+  <div class="ge-children">
+    {% for m in g.members %}
+    <div class="ge-row ge-member{{ ' missing' if m.missing }}" data-row="g:{{ g.index }}:{{ m.link }}" data-group="{{ g.index }}" data-link="{{ m.link }}">{{ m.title }}</div>
+    {% endfor %}
+  </div>
+</div>

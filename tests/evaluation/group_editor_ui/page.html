@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Expected groups editor</title>
+  <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js" integrity="sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V" crossorigin="anonymous"></script>
+  <link rel="stylesheet" href="/static/editor.css">
+  <script src="/static/editor.js" defer></script>
+</head>
+<body>
+  <div id="ge-error" hidden></div>
+  <main class="ge">
+    <section class="ge-panel" data-panel="groups">
+      <div id="groups">
+        {% for g in groups %}{% include "_group.html" %}{% endfor %}
+      </div>
+    </section>
+    <section class="ge-panel" data-panel="entries">
+      {% for e in entries %}{% include "_entry.html" %}{% endfor %}
+    </section>
+  </main>
+</body>
+</html>
