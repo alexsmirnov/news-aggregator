@@ -122,7 +122,7 @@ Each group gets one hotkey: `0` to `9`, then `a` to `z`, then `A` to `Z` typed w
 | Enter, Down, or Tab in the filter box | Go back to the entry list. The filter stays active. |
 | Esc in the filter box | Clear the filter and go back to the entry list |
 
-The mouse works too. A click selects a row, a click on the arrow expands it, and a double-click on a group title edits it. An expanded entry shows its content, cut off after 20 lines.
+The mouse works too. A click selects a row, a click on the arrow expands it, and a double-click on a group title edits it. An expanded entry shows its content, cut off after 20 lines. Each entry with content shows a blue badge with the content length in characters, for example `320` or `1.2k`. An entry with empty content has no badge, a dimmed arrow, and does not expand.
 
 The editor writes the YAML file after every change. It writes to a temporary file and then renames it, in the format shown in the table of frozen datasets. If the write fails, the editor keeps the old state and shows a red banner. The editor cannot delete a group. An entry can belong to several groups.
 

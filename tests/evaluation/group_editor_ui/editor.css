@@ -21,6 +21,12 @@ body { margin: 0; font: 14px/1.4 system-ui, sans-serif; color: #1f2937; }
 
 .ge-caret { display: inline-block; width: 1em; color: #6b7280; }
 .ge-row.expanded > .ge-caret { transform: rotate(90deg); }
+.ge-entry.ge-empty > .ge-caret { opacity: 0.2; }
+.ge-entry.ge-empty > .ge-title { color: #6b7280; }
+.ge-size {
+  margin-left: 8px; padding: 0 5px; border-radius: 8px; background: #e0f2fe;
+  color: #075985; font: 600 11px ui-monospace, monospace;
+}
 .ge-group { font-weight: 600; }
 .ge-count { color: #6b7280; font-weight: 400; }
 

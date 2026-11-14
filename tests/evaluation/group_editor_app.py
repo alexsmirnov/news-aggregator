@@ -43,6 +43,13 @@ def _group_view(editor: GroupEditor, index: int) -> dict[str, Any]:
     }
 
 
+def _content_size(content: str) -> str:
+    if not content.strip():
+        return ""
+    length = len(content)
+    return str(length) if length < 1000 else f"{length / 1000:.1f}k"
+
+
 def _render(template_name: str, **context: Any) -> str:
     return templates.get_template(template_name).render(**context)
 
@@ -79,6 +86,9 @@ def page(request: Request, editor: EditorDep) -> Response:
             "link": entry.link,
             "title": entry.title,
             "assigned": editor.assigned_keys(entry.link),
+            "size": _content_size(entry.content),
+            "chars": len(entry.content),
+            "empty": not entry.content.strip(),
         }
         for position, entry in enumerate(editor.entries)
     ]

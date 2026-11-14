@@ -121,7 +121,7 @@
   }
 
   function expand(row) {
-    if (isMember(row)) return;
+    if (isMember(row) || row.classList.contains("ge-empty")) return;
     state.expanded.add(row.dataset.row);
     if (isEntry(row)) loadContent(row);
     applyView();

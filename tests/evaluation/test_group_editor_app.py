@@ -52,6 +52,46 @@ def test_page_lists_groups_and_entries(client: TestClient) -> None:
     assert "line1" not in body
 
 
+def _entry_block(body: str, index: int) -> str:
+    start = body.index(f'id="entry-{index}"')
+    end = body.find('id="entry-', start + 1)
+    return body[start:] if end == -1 else body[start:end]
+
+
+def _page_with_content(tmp_path: Path, content: str) -> str:
+    entries = make_entries()
+    entries[0] = entries[0].model_copy(update={"content": content})
+    editor = GroupEditor(entries, make_groups(), tmp_path / "g.yaml")
+    return TestClient(create_app(editor)).get("/").text
+
+
+def test_page_shows_content_size_for_entries(client: TestClient) -> None:
+    block = _entry_block(client.get("/").text, 0)
+
+    assert re.search(r'class="ge-size"[^>]*>11<', block)
+    assert "ge-empty" not in block
+
+
+def test_page_marks_empty_content_entries(client: TestClient) -> None:
+    block = _entry_block(client.get("/").text, 1)
+
+    assert "ge-empty" in block
+    assert "ge-size" not in block
+
+
+def test_page_treats_whitespace_content_as_empty(tmp_path: Path) -> None:
+    block = _entry_block(_page_with_content(tmp_path, "  \n "), 0)
+
+    assert "ge-empty" in block
+    assert "ge-size" not in block
+
+
+def test_page_abbreviates_large_content_size(tmp_path: Path) -> None:
+    block = _entry_block(_page_with_content(tmp_path, "x" * 1234), 0)
+
+    assert re.search(r'class="ge-size"[^>]*>1\.2k<', block)
+
+
 def test_page_has_entry_filter_input(client: TestClient) -> None:
     body = client.get("/").text
 

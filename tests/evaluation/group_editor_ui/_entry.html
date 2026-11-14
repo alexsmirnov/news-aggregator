@@ -1,6 +1,7 @@
-<div id="entry-{{ e.index }}" class="ge-row ge-entry" data-row="e:{{ e.link }}" data-link="{{ e.link }}" data-index="{{ e.index }}">
+<div id="entry-{{ e.index }}" class="ge-row ge-entry{{ ' ge-empty' if e.empty }}" data-row="e:{{ e.link }}" data-link="{{ e.link }}" data-index="{{ e.index }}">
   <span class="ge-caret">▸</span>
   {% with i=e.index, keys=e.assigned, oob=False %}{% include "_keys.html" %}{% endwith %}
   <span class="ge-title">{{ e.title }}</span>
+  {% if e.size %}<span class="ge-size" title="{{ e.chars }} characters">{{ e.size }}</span>{% endif %}
   <div class="ge-content"></div>
 </div>
