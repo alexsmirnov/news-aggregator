@@ -16,6 +16,10 @@
       </div>
     </section>
     <section class="ge-panel" data-panel="entries">
+      <div class="ge-filter-bar">
+        <input id="ge-filter" type="search" autocomplete="off" placeholder="Filter entries by title (press / to focus)">
+        <span id="ge-filter-count"></span>
+      </div>
       {% for e in entries %}{% include "_entry.html" %}{% endfor %}
     </section>
   </main>

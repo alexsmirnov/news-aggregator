@@ -29,6 +29,9 @@ Frozen-dataset LLM quality evaluation; requires LLM credentials and is skipped o
 - [metrics.py](../tests/evaluation/metrics.py) - Metric helpers: pair-based clustering metrics, ROUGE-L scoring, Jaccard group matching, link-set extraction
 - [capture_dataset.py](../tests/evaluation/capture_dataset.py) - Standalone utility that freezes a Miniflux RSS snapshot into `data/rss_entries_<date>_<category>.json`
 - [test_capture_dataset.py](../tests/evaluation/test_capture_dataset.py) - Capture script behavior with mocked service and snapshot writing
+- [group_editor.py](../tests/evaluation/group_editor.py), [group_editor_app.py](../tests/evaluation/group_editor_app.py), [edit_groups.py](../tests/evaluation/edit_groups.py) - Local web editor for `expected_groups_<id>.yaml`: data logic, FastAPI routes, and CLI. See [Editing Expected Groups](evaluation_aggregator.md#editing-expected-groups-evaluation)
+- [test_group_editor.py](../tests/evaluation/test_group_editor.py) - Hotkey mapping, YAML load and save format, toggle/move/remove/rename/add-group behavior, 62-group limit, unknown group and entry errors, state kept after a failed save. Needs no LLM credentials
+- [test_group_editor_app.py](../tests/evaluation/test_group_editor_app.py) - Editor routes with `TestClient`: page rendering and escaping, lazy entry content, out-of-band HTML fragments, 204 for no change, 404 for unknown group or entry, 500 for a failed save. The keyboard script has no automated test
 
 Frozen fixtures in [tests/evaluation/data/](../tests/evaluation/data/): RSS snapshots for two dates/categories, plus human-verified expected groups and summaries for `2026_07_22_Economy`.
 

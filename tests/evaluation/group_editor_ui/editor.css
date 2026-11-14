@@ -5,6 +5,16 @@ body { margin: 0; font: 14px/1.4 system-ui, sans-serif; color: #1f2937; }
 .ge-panel { overflow-y: auto; border: 2px solid #e5e7eb; border-radius: 6px; }
 .ge-panel.active { border-color: #2563eb; }
 
+[hidden] { display: none !important; }
+
+.ge-filter-bar {
+  position: sticky; top: 0; z-index: 1; display: flex; gap: 8px;
+  align-items: center; padding: 6px 8px; background: #fff;
+  border-bottom: 1px solid #e5e7eb;
+}
+#ge-filter { flex: 1; font: inherit; padding: 3px 6px; }
+#ge-filter-count { color: #6b7280; font-size: 12px; white-space: nowrap; }
+
 .ge-row { padding: 3px 8px; cursor: default; }
 .ge-row.selected { background: #e0e7ff; }
 .ge-panel.active .ge-row.selected { background: #bfdbfe; outline: 1px solid #2563eb; }

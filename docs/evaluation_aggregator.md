@@ -92,7 +92,45 @@ Only `2026_07_22_Economy` has expected data, so grouping tests run for all disco
 
 ## Dataset Capture Utility #evaluation
 
-[capture_dataset.py](../tests/evaluation/capture_dataset.py) freezes a new RSS snapshot: it builds a real `MinifluxClient` and calls `DigestService.fetch_entries` for a category and date, then writes `data/rss_entries_<YYYY_MM_DD>_<category>.json` ([capture_dataset.py:21-41](../tests/evaluation/capture_dataset.py#L21-L41), [capture_dataset.py:61-80](../tests/evaluation/capture_dataset.py#L61-L80)). CLI options: `--category` (`news` | `Economy` | `Technology`, default `news`) and `--date` (`YYYY-MM-DD`, default today) ([capture_dataset.py:44-58](../tests/evaluation/capture_dataset.py#L44-L58)). The script is unit-tested with a mocked service in [tests/evaluation/test_capture_dataset.py](../tests/evaluation/test_capture_dataset.py). Expected groups/summaries for a new dataset must be authored by hand following the shapes above (groups as YAML, summaries as JSON).
+[capture_dataset.py](../tests/evaluation/capture_dataset.py) freezes a new RSS snapshot: it builds a real `MinifluxClient` and calls `DigestService.fetch_entries` for a category and date, then writes `data/rss_entries_<YYYY_MM_DD>_<category>.json` ([capture_dataset.py:21-41](../tests/evaluation/capture_dataset.py#L21-L41), [capture_dataset.py:61-80](../tests/evaluation/capture_dataset.py#L61-L80)). CLI options: `--category` (`news` | `Economy` | `Technology`, default `news`) and `--date` (`YYYY-MM-DD`, default today) ([capture_dataset.py:44-58](../tests/evaluation/capture_dataset.py#L44-L58)). The script is unit-tested with a mocked service in [tests/evaluation/test_capture_dataset.py](../tests/evaluation/test_capture_dataset.py). Expected groups/summaries for a new dataset must be authored by hand following the shapes above (groups as YAML, summaries as JSON). Use the [group editor](#editing-expected-groups-evaluation) for the groups.
+
+## Editing Expected Groups #evaluation
+
+[edit_groups.py](../tests/evaluation/edit_groups.py) is a local web editor for `expected_groups_<id>.yaml`. It uses FastAPI and htmx, so it needs no extra dependency. The page has two panels. The left panel lists the groups with their hotkeys. The right panel lists the RSS entries with the hotkeys of the groups that contain them.
+
+To start the editor, run this command from the repository root:
+
+```
+uv run python tests/evaluation/edit_groups.py tests/evaluation/data/rss_entries_<id>.json tests/evaluation/data/expected_groups_<id>.yaml
+```
+
+Then open `http://127.0.0.1:4091`. The `--port` flag changes the port. To reach the editor from outside a container, add `--host 0.0.0.0`. The editor has no login, so use this flag only on a trusted network. If the YAML file does not exist, the editor creates it at the first change.
+
+Each group gets one hotkey: `0` to `9`, then `a` to `z`, then `A` to `Z` typed with Shift. This allows 62 groups. Hotkeys are case sensitive, so turn CapsLock off.
+
+| Key | Action |
+|---|---|
+| Tab, Shift+Tab | Switch between the panels |
+| Up, Down | Move the selection |
+| Right, Left | Expand or collapse the selected group or entry. Left on an entry inside a group collapses that group. |
+| Hotkey on an entry in the right panel | Add the entry to that group. If the entry is already in the group, remove it. |
+| Hotkey on an entry inside a group | Move the entry to the group of the hotkey |
+| Del on an entry inside a group | Remove the entry from that group. The entry stays in the dataset. |
+| Enter on a group | Edit the title. Enter saves and Esc cancels. Hotkeys are off while you edit. |
+| Ins in the left panel | Add a group named `New group` and edit its title |
+| `/` | Go to the filter box above the entries. Type words to show only the entries whose title contains all of them. |
+| Enter, Down, or Tab in the filter box | Go back to the entry list. The filter stays active. |
+| Esc in the filter box | Clear the filter and go back to the entry list |
+
+The mouse works too. A click selects a row, a click on the arrow expands it, and a double-click on a group title edits it. An expanded entry shows its content, cut off after 20 lines.
+
+The editor writes the YAML file after every change. It writes to a temporary file and then renames it, in the format shown in the table of frozen datasets. If the write fails, the editor keeps the old state and shows a red banner. The editor cannot delete a group. An entry can belong to several groups.
+
+The editor refuses to start in three cases. The YAML path points to the JSON file, the JSON file has duplicate links, or the YAML file has keys other than `title` and `entries`. If a YAML entry has a link that is not in the JSON file, the editor marks it `missing` and keeps it.
+
+Summary tests look up each reference summary by the title of the expected group. If you rename a group that has a reference summary, you must rename the title in `expected_summaries_<id>.json` too. Otherwise the summary tests skip that group.
+
+The data logic is in [group_editor.py](../tests/evaluation/group_editor.py), the HTTP routes are in [group_editor_app.py](../tests/evaluation/group_editor_app.py), and the page, keyboard script, and styles are in `tests/evaluation/group_editor_ui/`. Tests cover the data logic and the routes. The keyboard script `editor.js` has no automated test.
 
 ## Fixtures and Execution Model #evaluation
 

@@ -24,8 +24,43 @@
 
   function rows(panel) {
     return [...panelEl(panel).querySelectorAll(".ge-row")].filter(
-      (row) => !isMember(row) || state.expanded.has(`g:${row.dataset.group}`),
+      (row) =>
+        !row.hidden &&
+        (!isMember(row) || state.expanded.has(`g:${row.dataset.group}`)),
     );
+  }
+
+  // Entry filter: every word must appear in the title (case-insensitive).
+  const filterInput = () => document.getElementById("ge-filter");
+
+  function applyFilter() {
+    const words = filterInput().value.toLowerCase().split(/\s+/).filter(Boolean);
+    const entryRows = [...panelEl("entries").querySelectorAll(".ge-entry")];
+    let shown = 0;
+    for (const row of entryRows) {
+      row.dataset.lower ??= row.querySelector(".ge-title").textContent.toLowerCase();
+      row.hidden = !words.every((word) => row.dataset.lower.includes(word));
+      if (!row.hidden) shown += 1;
+    }
+    document.getElementById("ge-filter-count").textContent = words.length
+      ? `${shown} / ${entryRows.length}`
+      : "";
+    state.cursor.entries = null; // select the first visible entry
+    state.pos.entries = 0;
+    applyView();
+  }
+
+  function focusList() {
+    filterInput().blur();
+    state.panel = "entries";
+    applyView();
+  }
+
+  function focusFilter() {
+    state.panel = "entries";
+    applyView();
+    filterInput().focus();
+    filterInput().select();
   }
 
   function currentRow() {
@@ -182,6 +217,9 @@
         if (!row || !isGroup(row)) return false;
         startEdit(row);
         return true;
+      case "/":
+        focusFilter();
+        return true;
       case "Insert":
         if (state.panel !== "groups") return false;
         state.pendingEditCount = groupRows().length;
@@ -201,8 +239,21 @@
   }
 
   document.addEventListener("keydown", (event) => {
-    if (state.editing || event.ctrlKey || event.altKey || event.metaKey) return;
+    if (state.editing || event.target instanceof HTMLInputElement) return;
+    if (event.ctrlKey || event.altKey || event.metaKey) return;
     if (handleKey(event)) event.preventDefault();
+  });
+
+  filterInput().addEventListener("input", applyFilter);
+  filterInput().addEventListener("keydown", (event) => {
+    if (["Enter", "ArrowDown", "Tab"].includes(event.key)) {
+      event.preventDefault();
+      focusList();
+    } else if (event.key === "Escape") {
+      filterInput().value = "";
+      applyFilter();
+      focusList();
+    }
   });
 
   document.addEventListener("click", (event) => {

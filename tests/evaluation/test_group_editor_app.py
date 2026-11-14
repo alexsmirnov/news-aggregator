@@ -52,6 +52,13 @@ def test_page_lists_groups_and_entries(client: TestClient) -> None:
     assert "line1" not in body
 
 
+def test_page_has_entry_filter_input(client: TestClient) -> None:
+    body = client.get("/").text
+
+    assert re.search(r'<input[^>]*id="ge-filter"', body)
+    assert 'id="ge-filter-count"' in body
+
+
 def test_page_marks_missing_member(client: TestClient) -> None:
     body = client.get("/").text
 
