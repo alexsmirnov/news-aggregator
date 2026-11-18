@@ -3,18 +3,24 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from group_editor import ExpectedGroup, GroupEditor
-from group_editor_app import create_app
+from group_editor import (
+    MAX_GROUPS,
+    ExpectedEntry,
+    ExpectedGroup,
+    GroupEditor,
+)
+from group_editor_app import _display_title, create_app
 from group_editor_fixtures import (
     LINK_A,
     LINK_B,
     LINK_MISSING,
+    make_cluster_groups,
     make_entries,
     make_groups,
     saved,
 )
 
-MAX_GROUP_COUNT = 62
+SINGLE_KEY_LIMIT = 62
 
 
 @pytest.fixture
@@ -190,13 +196,148 @@ def test_add_group_appends_oob(client: TestClient) -> None:
     assert "New group" in body
 
 
+def test_add_group_without_layout_change_does_not_refresh(
+    client: TestClient,
+) -> None:
+    response = client.post("/groups")
+
+    assert "hx-refresh" not in response.headers
+
+
+def test_add_group_crossing_layout_refreshes(groups_path: Path) -> None:
+    groups = [ExpectedGroup(title=f"G{i}") for i in range(SINGLE_KEY_LIMIT)]
+    full_client = TestClient(
+        create_app(GroupEditor(make_entries(), groups, groups_path))
+    )
+
+    response = full_client.post("/groups")
+
+    assert response.status_code == 200
+    assert response.headers["hx-refresh"] == "true"
+    assert len(saved(groups_path)) == SINGLE_KEY_LIMIT + 1
+
+
 def test_add_group_at_limit_returns_204(groups_path: Path) -> None:
-    groups = [ExpectedGroup(title=f"G{i}") for i in range(MAX_GROUP_COUNT)]
+    groups = [ExpectedGroup(title=f"G{i}") for i in range(MAX_GROUPS)]
     full_client = TestClient(
         create_app(GroupEditor(make_entries(), groups, groups_path))
     )
 
     assert full_client.post("/groups").status_code == 204
+
+
+@pytest.fixture
+def cluster_client(groups_path: Path) -> TestClient:
+    editor = GroupEditor(make_entries(), make_cluster_groups(), groups_path)
+    return TestClient(create_app(editor))
+
+
+def _group_block(body: str, index: int) -> str:
+    start = body.index(f'id="group-{index}"')
+    end = body.find('id="group-', start + 1)
+    return body[start : end if end != -1 else len(body)]
+
+
+def _title_span(block: str) -> str:
+    match = re.search(r'<span class="ge-title[^"]*">.*?</span>', block, re.S)
+    assert match, "group block has no title span"
+    return match.group(0)
+
+
+def test_page_shows_first_entry_title_as_placeholder(
+    cluster_client: TestClient,
+) -> None:
+    body = cluster_client.get("/").text
+
+    title = _title_span(_group_block(body, 0))
+    assert "ge-placeholder" in title
+    assert "Alpha rises" in title
+
+
+def test_placeholder_follows_first_entry_after_remove(
+    cluster_client: TestClient,
+) -> None:
+    response = cluster_client.delete(
+        "/groups/0/entries", params={"link": LINK_A}
+    )
+
+    title = _title_span(_group_block(response.text, 0))
+    assert "ge-placeholder" in title
+    assert "Beta falls" in title
+
+
+@pytest.mark.parametrize(
+    ("group", "expected"),
+    [
+        (ExpectedGroup(), ("(untitled)", True)),
+        (
+            ExpectedGroup(
+                title="  ",
+                entries=[ExpectedEntry(title="Alpha rises", link=LINK_A)],
+            ),
+            ("Alpha rises", True),
+        ),
+        (
+            ExpectedGroup(
+                title="T",
+                entries=[ExpectedEntry(title="Alpha rises", link=LINK_A)],
+            ),
+            ("T", False),
+        ),
+    ],
+)
+def test_display_title_cases(
+    group: ExpectedGroup, expected: tuple[str, bool]
+) -> None:
+    assert _display_title(group) == expected
+
+
+def test_titled_group_has_no_placeholder_class(client: TestClient) -> None:
+    body = client.get("/").text
+
+    assert "ge-placeholder" not in _title_span(_group_block(body, 0))
+
+
+def test_page_hides_group_metadata(cluster_client: TestClient) -> None:
+    body = cluster_client.get("/").text
+
+    assert not any(
+        key in body for key in ("novelty", "indices", "trend_score")
+    )
+    assert "0.9" not in body
+    assert "[0, 1]" not in body
+
+
+def test_page_orders_groups_by_trend(cluster_client: TestClient) -> None:
+    body = cluster_client.get("/").text
+
+    assert "Alpha rises" in _group_block(body, 0)
+    assert "Gamma" in _group_block(body, 1)
+
+
+def test_group_rows_carry_keys(groups_path: Path) -> None:
+    groups = [ExpectedGroup(title=f"G{i}") for i in range(63)]
+    big_client = TestClient(
+        create_app(GroupEditor(make_entries(), groups, groups_path))
+    )
+
+    body = big_client.get("/").text
+
+    assert 'data-key="Y"' in _group_block(body, 60)
+    last = _group_block(body, 62)
+    assert 'data-key="Z1"' in last
+    assert "<kbd>Z1</kbd>" in last
+
+
+def test_entry_and_member_rows_are_draggable(client: TestClient) -> None:
+    body = client.get("/").text
+
+    assert re.search(
+        r'class="ge-row ge-entry[^"]*"[^>]*draggable="true"', body
+    )
+    assert re.search(
+        r'class="ge-row ge-member[^"]*"[^>]*draggable="true"', body
+    )
 
 
 def test_rename_returns_group(client: TestClient) -> None:

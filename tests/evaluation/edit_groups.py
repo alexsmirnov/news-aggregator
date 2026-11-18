@@ -1,5 +1,9 @@
 """Keyboard-driven editor for tests/evaluation/data/expected_groups_*.yaml.
 
+Also opens tmp/cluster_eval_*.yaml from test_cluster_eval.py: metric keys are
+hidden and kept on save, and groups without a title show a placeholder.
+Copy that file first, the test overwrites it.
+
 Usage:
     uv run python tests/evaluation/edit_groups.py \
         <rss_entries.json> <expected_groups.yaml> [--host H] [--port P]

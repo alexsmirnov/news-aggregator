@@ -44,7 +44,11 @@ kbd {
   font: 600 12px ui-monospace, monospace; background: #f3f4f6;
   border: 1px solid #d1d5db; border-radius: 3px;
 }
-.ge-keys { display: inline-block; min-width: 3em; font: 600 12px ui-monospace, monospace; color: #2563eb; }
+.ge-keys { display: inline-block; min-width: 5em; font: 600 12px ui-monospace, monospace; color: #2563eb; }
+kbd.ge-key-pending { background: #fde68a; border-color: #d97706; }
+
+.ge-placeholder { color: #6b7280; font-style: italic; font-weight: 400; }
+.ge-block.ge-drop-target { outline: 2px dashed #2563eb; outline-offset: -2px; background: #eff6ff; }
 
 .ge-edit { font: inherit; width: 70%; }
 

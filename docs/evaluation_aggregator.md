@@ -96,7 +96,7 @@ Only `2026_07_22_Economy` has expected data, so grouping tests run for all disco
 
 ## Editing Expected Groups #evaluation
 
-[edit_groups.py](../tests/evaluation/edit_groups.py) is a local web editor for `expected_groups_<id>.yaml`. It uses FastAPI and htmx, so it needs no extra dependency. The page has two panels. The left panel lists the groups with their hotkeys. The right panel lists the RSS entries with the hotkeys of the groups that contain them.
+[edit_groups.py](../tests/evaluation/edit_groups.py) is a local web editor for `expected_groups_<id>.yaml`. It also opens the `tmp/cluster_eval_<id>.yaml` files that `test_cluster_eval.py` writes (see [Editing cluster eval files](#editing-cluster-eval-files)). It uses FastAPI and htmx, so it needs no extra dependency. The page has two panels. The left panel lists the groups with their hotkeys. The right panel lists the RSS entries with the hotkeys of the groups that contain them.
 
 To start the editor, run this command from the repository root:
 
@@ -106,7 +106,7 @@ uv run python tests/evaluation/edit_groups.py tests/evaluation/data/rss_entries_
 
 Then open `http://127.0.0.1:4091`. The `--port` flag changes the port. To reach the editor from outside a container, add `--host 0.0.0.0`. The editor has no login, so use this flag only on a trusted network. If the YAML file does not exist, the editor creates it at the first change.
 
-Each group gets one hotkey: `0` to `9`, then `a` to `z`, then `A` to `Z` typed with Shift. This allows 62 groups. Hotkeys are case sensitive, so turn CapsLock off.
+Each group gets a hotkey. The characters are `0` to `9`, then `a` to `z`, then `A` to `Z` typed with Shift. Hotkeys are case sensitive, so turn CapsLock off. With 62 groups or fewer, every hotkey is one character. With more groups, the last characters become prefixes: the first groups keep one-character hotkeys and the rest get two characters, for example `R0` or `Zq`. The editor allows up to 3783 groups. To use a two-character hotkey, type the first character (the matching hotkeys light up in yellow), then the second. Any other key cancels the first character. The right panel shows all hotkeys of an entry, separated by spaces, for example `0 Ra`. When Ins adds a group and this changes the hotkey of existing groups, the page reloads to show the new hotkeys. In that case the new group is not opened for title editing, so double-click its title.
 
 | Key | Action |
 |---|---|
@@ -122,11 +122,21 @@ Each group gets one hotkey: `0` to `9`, then `a` to `z`, then `A` to `Z` typed w
 | Enter, Down, or Tab in the filter box | Go back to the entry list. The filter stays active. |
 | Esc in the filter box | Clear the filter and go back to the entry list |
 
-The mouse works too. A click selects a row, a click on the arrow expands it, and a double-click on a group title edits it. An expanded entry shows its content, cut off after 20 lines. Each entry with content shows a blue badge with the content length in characters, for example `320` or `1.2k`. An entry with empty content has no badge, a dimmed arrow, and does not expand.
+The mouse works too. A click selects a row, a click on the arrow expands it, and a double-click on a group title edits it. You can drag an entry from the right panel and drop it on any group. The group is outlined while you drag over it. The entry is added to the group, unless the group already holds it. You can also drag an entry inside a group and drop it on another group to move it. A drop on the same group does nothing. An expanded entry shows its content, cut off after 20 lines. Each entry with content shows a blue badge with the content length in characters, for example `320` or `1.2k`. An entry with empty content has no badge, a dimmed arrow, and does not expand.
 
 The editor writes the YAML file after every change. It writes to a temporary file and then renames it, in the format shown in the table of frozen datasets. If the write fails, the editor keeps the old state and shows a red banner. The editor cannot delete a group. An entry can belong to several groups.
 
-The editor refuses to start in three cases. The YAML path points to the JSON file, the JSON file has duplicate links, or the YAML file has keys other than `title` and `entries`. If a YAML entry has a link that is not in the JSON file, the editor marks it `missing` and keeps it.
+The editor refuses to start in three cases. The YAML path points to the JSON file, the JSON file has duplicate links, or a YAML entry has keys other than `title` and `link`. If a YAML entry has a link that is not in the JSON file, the editor marks it `missing` and keeps it.
+
+### Editing cluster eval files
+
+`test_cluster_eval.py` writes `tmp/cluster_eval_<id>.yaml`. Its groups have no `title`, and each group has metric keys such as `size`, `trend_score`, and `indices`. The editor accepts this format:
+
+- **Metrics are hidden and kept.** The editor does not show any group key other than `title` and `entries`. On every save, each group keeps these keys with the same values, after `title` and before `entries`. The editor does not update them, so `size` becomes wrong after you add or remove entries. YAML comments are not kept.
+- **Groups are sorted by `trend_score`, highest first.** Groups without a numeric `trend_score` come last, in file order. The file is saved in this order. A group that you add with Ins goes to the end.
+- **A group without a title shows a placeholder.** The editor shows the title of the first entry of the group in dimmed italics. If the group has no entries, it shows `(untitled)`. The same applies to an empty or blank title. Editing an untitled group starts with an empty box that shows the placeholder. Enter on an empty box changes nothing. The editor writes a `title` key only after you type a title.
+
+The editor writes to the file you give it, and `test_cluster_eval.py` overwrites `tmp/cluster_eval_<id>.yaml` each time it runs. Copy the file to another place before you edit it. To use the result as `expected_groups_<id>.yaml`, give every group a title. The summary tests find a reference summary by the title of the group, and the judge reads the group data, so untitled groups cannot be matched.
 
 Summary tests look up each reference summary by the title of the expected group. If you rename a group that has a reference summary, you must rename the title in `expected_summaries_<id>.json` too. Otherwise the summary tests skip that group.
 

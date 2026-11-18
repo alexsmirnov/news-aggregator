@@ -5,6 +5,7 @@
   const HOTKEYS =
     "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
   const PANELS = ["groups", "entries"];
+  const MODIFIER_KEYS = ["Shift", "Control", "Alt", "Meta", "CapsLock"];
 
   const state = {
     panel: "groups",
@@ -12,6 +13,7 @@
     pos: { groups: 0, entries: 0 }, // last row position per panel
     expanded: new Set(),
     editing: false,
+    prefix: "", // first key of a pending two-character group key
     pendingEditCount: null, // group count before Ins, to open edit on the new group
   };
   let queue = Promise.resolve();
@@ -98,15 +100,18 @@
       row.classList.toggle("selected", row.dataset.row === state.cursor[panel]);
       row.classList.toggle("expanded", state.expanded.has(row.dataset.row));
     }
+    markPending(); // server updates may have replaced highlighted keys
     document
       .querySelector(`[data-panel="${state.panel}"] .selected`)
       ?.scrollIntoView({ block: "nearest" });
   }
 
-  function send(method, path, params = {}) {
+  // `guard` runs when the request reaches the front of the queue, so it sees
+  // the page after earlier requests were applied.
+  function send(method, path, params = {}, guard = () => true) {
     const url = `${path}?${new URLSearchParams(params)}`;
     queue = queue
-      .then(() => htmx.ajax(method, url, { swap: "none" }))
+      .then(() => guard() && htmx.ajax(method, url, { swap: "none" }))
       .catch(() => {});
   }
 
@@ -146,9 +151,45 @@
     applyView();
   }
 
-  function assign(index) {
+  const groupByKey = (key) =>
+    groupRows().find((row) => row.dataset.key === key) ?? null;
+
+  function clearPrefix() {
+    state.prefix = "";
+    markPending();
+  }
+
+  // A key that starts two-character group keys waits for the second key.
+  function markPending() {
+    for (const row of groupRows()) {
+      const pending =
+        state.prefix !== "" &&
+        row.dataset.key.length === 2 &&
+        row.dataset.key[0] === state.prefix;
+      row.querySelector("kbd").classList.toggle("ge-key-pending", pending);
+    }
+  }
+
+  function startPrefix(char) {
+    state.prefix = char;
+    markPending();
+    if (document.querySelector("kbd.ge-key-pending")) return true;
+    state.prefix = "";
+    return false;
+  }
+
+  function pressHotkey(char) {
+    const pending = state.prefix;
+    clearPrefix();
+    if (pending) return assign(pending + char);
+    return startPrefix(char) || assign(char);
+  }
+
+  function assign(key) {
     const row = currentRow();
-    if (!row || index >= groupRows().length) return false;
+    const target = groupByKey(key);
+    if (!row || !target) return false;
+    const index = target.dataset.group;
     if (state.panel === "entries" && isEntry(row)) {
       send("POST", `/groups/${index}/toggle`, { link: row.dataset.link });
       return true;
@@ -169,7 +210,11 @@
     const original = titleEl.textContent;
     const input = document.createElement("input");
     input.className = "ge-edit";
-    input.value = original;
+    if (titleEl.classList.contains("ge-placeholder")) {
+      input.placeholder = original; // untitled: show the hint, start empty
+    } else {
+      input.value = original;
+    }
     titleEl.replaceWith(input);
     state.editing = true;
     input.focus();
@@ -194,8 +239,18 @@
     input.addEventListener("blur", () => finish(false));
   }
 
+  function insertGroup() {
+        if (state.panel !== "groups") return false;
+        state.pendingEditCount = groupRows().length;
+        send("POST", "/groups");
+        return true;
+  }
+
   function handleKey(event) {
     const row = currentRow();
+    if (MODIFIER_KEYS.includes(event.key)) return false; // Shift+r sends Shift first
+    const isHotkey = event.key.length === 1 && HOTKEYS.includes(event.key);
+    if (!isHotkey) clearPrefix();
     switch (event.key) {
       case "Tab":
         state.panel = state.panel === "groups" ? "entries" : "groups";
@@ -214,17 +269,16 @@
         if (row) collapse(row);
         return true;
       case "Enter":
-        if (!row || !isGroup(row)) return false;
+        if (event.ctrlKey || event.metaKey || event.altKey) {
+          return insertGroup();
+        } else if (!row || !isGroup(row)) return false;
         startEdit(row);
         return true;
       case "/":
         focusFilter();
         return true;
       case "Insert":
-        if (state.panel !== "groups") return false;
-        state.pendingEditCount = groupRows().length;
-        send("POST", "/groups");
-        return true;
+        return insertGroup();
       case "Delete":
         if (!row || !isMember(row)) return false;
         send("DELETE", `/groups/${row.dataset.group}/entries`, {
@@ -232,15 +286,13 @@
         });
         return true;
       default:
-        return event.key.length === 1 && HOTKEYS.includes(event.key)
-          ? assign(HOTKEYS.indexOf(event.key))
-          : false;
+        return isHotkey ? pressHotkey(event.key) : false;
     }
   }
 
   document.addEventListener("keydown", (event) => {
     if (state.editing || event.target instanceof HTMLInputElement) return;
-    if (event.ctrlKey || event.altKey || event.metaKey) return;
+    if (event.key !== "Enter" && (event.ctrlKey || event.altKey || event.metaKey)) return;
     if (handleKey(event)) event.preventDefault();
   });
 
@@ -274,6 +326,68 @@
     const title = event.target.closest(".ge-group .ge-title");
     if (title) startEdit(title.closest(".ge-row"));
   });
+
+  // Drag an entry (or a group member) onto any group block.
+  let drag = null; // { link, source: group index of a dragged member | null }
+  let dropTarget = null;
+
+  const dropBlock = (event) => event.target.closest?.(".ge-block") ?? null;
+
+  function setDropTarget(block) {
+    if (block === dropTarget) return;
+    dropTarget?.classList.remove("ge-drop-target");
+    dropTarget = block;
+    dropTarget?.classList.add("ge-drop-target");
+  }
+
+  function endDrag() {
+    setDropTarget(null);
+    drag = null;
+  }
+
+  function dropOn(block) {
+    const target = block.querySelector(".ge-group").dataset.group;
+    const { link, source } = drag;
+    if (source === null) {
+      // toggle would remove an entry that a queued drop already added
+      const absent = () =>
+        ![...document.querySelectorAll(`#group-${target} .ge-member`)].some(
+          (member) => member.dataset.link === link,
+        );
+      send("POST", `/groups/${target}/toggle`, { link }, absent);
+    } else if (source !== target) {
+      send("POST", `/groups/${source}/move`, { target, link });
+    }
+  }
+
+  document.addEventListener("dragstart", (event) => {
+    const row = event.target.closest?.(".ge-entry, .ge-member");
+    if (!row) return;
+    drag = { link: row.dataset.link, source: isMember(row) ? row.dataset.group : null };
+    event.dataTransfer.effectAllowed = "copyMove";
+    event.dataTransfer.setData("text/plain", row.dataset.link); // Firefox needs data
+  });
+
+  document.addEventListener("dragover", (event) => {
+    const block = dropBlock(event);
+    if (!drag || !block) return;
+    event.preventDefault();
+    setDropTarget(block);
+  });
+
+  document.addEventListener("dragleave", (event) => {
+    if (!event.relatedTarget?.closest?.(".ge-block")) setDropTarget(null);
+  });
+
+  document.addEventListener("drop", (event) => {
+    const block = dropBlock(event);
+    if (!drag || !block) return;
+    event.preventDefault();
+    dropOn(block);
+    endDrag();
+  });
+
+  document.addEventListener("dragend", endDrag);
 
   const errorEl = () => document.getElementById("ge-error");
 

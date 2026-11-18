@@ -1,10 +1,12 @@
 import json
+import math
 import os
 import sys
 import threading
 from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, ConfigDict, TypeAdapter
@@ -14,8 +16,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from news.digest.schemas import RssEntry
 
 HOTKEYS = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-MAX_GROUPS = len(HOTKEYS)
+# One single-character key must stay free, every other character can be a
+# prefix of HOTKEYS-many two-character keys.
+MAX_GROUPS = 1 + (len(HOTKEYS) - 1) * len(HOTKEYS)
 NEW_GROUP_TITLE = "New group"
+TREND_SCORE_KEY = "trend_score"
 
 
 class ExpectedEntry(BaseModel):
@@ -26,9 +31,11 @@ class ExpectedEntry(BaseModel):
 
 
 class ExpectedGroup(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    """Expected group; extra keys (cluster metrics) are kept but not shown."""
 
-    title: str
+    model_config = ConfigDict(extra="allow")
+
+    title: str | None = None
     entries: list[ExpectedEntry] = []
 
 
@@ -44,8 +51,48 @@ _GROUPS_ADAPTER = TypeAdapter(list[ExpectedGroup])
 _YAML_LINE_WIDTH = 1_000_000
 
 
-def hotkey(index: int) -> str:
-    return HOTKEYS[index] if 0 <= index < MAX_GROUPS else ""
+def assign_hotkeys(count: int) -> list[str]:
+    """Return a prefix-free key for each of `count` groups.
+
+    Up to len(HOTKEYS) groups get one character each. Beyond that, the
+    last characters of HOTKEYS become prefixes of two-character keys and
+    only as many of them as needed are taken from the single-key pool.
+    """
+    if not 0 <= count <= MAX_GROUPS:
+        raise ValueError(f"group count out of range: {count}")
+    single_count = len(HOTKEYS)
+    if count <= single_count:
+        return list(HOTKEYS[:count])
+    prefix_count = math.ceil((count - single_count) / (single_count - 1))
+    singles = HOTKEYS[: single_count - prefix_count]
+    two_character = (
+        prefix + second
+        for prefix in HOTKEYS[single_count - prefix_count :]
+        for second in HOTKEYS
+    )
+    keys = list(singles)
+    keys.extend(key for _, key in zip(range(count - len(keys)), two_character))
+    return keys
+
+
+def is_untitled(group: ExpectedGroup) -> bool:
+    return not (group.title or "").strip()
+
+
+def _trend_score(group: ExpectedGroup) -> float | None:
+    score = (group.model_extra or {}).get(TREND_SCORE_KEY)
+    numeric = isinstance(score, int | float) and not isinstance(score, bool)
+    return score if numeric else None
+
+
+def sort_by_trend(groups: list[ExpectedGroup]) -> list[ExpectedGroup]:
+    """Highest trend score first; groups without a numeric score keep order."""
+
+    def sort_key(group: ExpectedGroup) -> tuple[int, float]:
+        score = _trend_score(group)
+        return (1, 0.0) if score is None else (0, -score)
+
+    return sorted(groups, key=sort_key)
 
 
 def load_entries(path: Path) -> list[RssEntry]:
@@ -65,9 +112,18 @@ def load_groups(path: Path) -> list[ExpectedGroup]:
     return _GROUPS_ADAPTER.validate_python(raw_groups)
 
 
+def _group_to_yaml(group: ExpectedGroup) -> dict[str, Any]:
+    data: dict[str, Any] = {}
+    if group.title is not None:
+        data["title"] = group.title
+    data.update(group.model_extra or {})
+    data["entries"] = [entry.model_dump() for entry in group.entries]
+    return data
+
+
 def save_groups(path: Path, groups: list[ExpectedGroup]) -> None:
     text = yaml.safe_dump(
-        [group.model_dump() for group in groups],
+        [_group_to_yaml(group) for group in groups],
         sort_keys=False,
         allow_unicode=True,
         width=_YAML_LINE_WIDTH,
@@ -96,12 +152,18 @@ class GroupEditor:
         groups_path: Path,
     ) -> None:
         self.entries = entries
-        self.groups = groups
+        self.groups = sort_by_trend(groups)
         self.groups_path = groups_path
         self.entry_index = {}
         for position, entry in enumerate(entries):
             self.entry_index.setdefault(entry.link, position)
         self._lock = threading.Lock()
+        self._keys: list[str] = []
+
+    def key_of(self, index: int) -> str:
+        if len(self._keys) != len(self.groups):
+            self._keys = assign_hotkeys(len(self.groups))
+        return self._keys[index]
 
     def toggle(self, group: int, link: str) -> bool:
         def mutate(groups: list[ExpectedGroup]) -> bool:
@@ -164,8 +226,8 @@ class GroupEditor:
             return len(updated) - 1
 
     def assigned_keys(self, link: str) -> str:
-        return "".join(
-            hotkey(i)
+        return " ".join(
+            self.key_of(i)
             for i, group in enumerate(self.groups)
             if _find(group, link) is not None
         )

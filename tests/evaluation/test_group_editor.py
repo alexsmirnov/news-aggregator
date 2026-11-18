@@ -4,20 +4,25 @@ from pathlib import Path
 import pytest
 import yaml
 from group_editor import (
+    MAX_GROUPS,
     ExpectedEntry,
     ExpectedGroup,
     GroupEditor,
     UnknownEntryError,
     UnknownGroupError,
-    hotkey,
+    assign_hotkeys,
     load_entries,
     load_groups,
     save_groups,
+    sort_by_trend,
 )
 from group_editor_fixtures import (
+    CLUSTER_YAML,
     LINK_A,
     LINK_B,
+    LINK_C,
     LINK_MISSING,
+    make_cluster_groups,
     make_entries,
     make_groups,
     saved,
@@ -37,16 +42,47 @@ def editor(groups_path: Path) -> GroupEditor:
     return GroupEditor(make_entries(), make_groups(), groups_path)
 
 
-def test_hotkey_maps_digits_then_lower_then_upper() -> None:
-    assert [hotkey(i) for i in (0, 9, 10, 35, 36, 61, 62)] == [
-        "0",
-        "9",
-        "a",
-        "z",
-        "A",
-        "Z",
-        "",
-    ]
+@pytest.fixture
+def cluster_editor(groups_path: Path) -> GroupEditor:
+    return GroupEditor(make_entries(), make_cluster_groups(), groups_path)
+
+
+def test_assign_hotkeys_up_to_62_are_single_characters() -> None:
+    keys = assign_hotkeys(62)
+
+    assert keys[:3] == ["0", "1", "2"]
+    assert [keys[i] for i in (9, 10, 35, 36, 61)] == ["9", "a", "z", "A", "Z"]
+    assert assign_hotkeys(3) == ["0", "1", "2"]
+
+
+def test_assign_hotkeys_over_62_spills_into_two_characters() -> None:
+    keys = assign_hotkeys(63)
+
+    assert keys[60:] == ["Y", "Z0", "Z1"]
+
+
+def test_assign_hotkeys_large_layout() -> None:
+    keys = assign_hotkeys(576)
+
+    assert keys[52] == "Q"
+    assert keys[53] == "R0"
+    assert keys[575] == "Zq"
+    assert len(set(keys)) == 576
+
+
+@pytest.mark.parametrize("count", [63, 576, MAX_GROUPS])
+def test_assign_hotkeys_is_prefix_free(count: int) -> None:
+    keys = assign_hotkeys(count)
+
+    singles = {key for key in keys if len(key) == 1}
+    prefixes = {key[0] for key in keys if len(key) == 2}
+    assert not singles & prefixes
+    assert len(set(keys)) == count
+
+
+def test_max_groups_uses_every_two_character_key() -> None:
+    assert MAX_GROUPS == 3783
+    assert len(assign_hotkeys(MAX_GROUPS)) == MAX_GROUPS
 
 
 def test_load_groups_missing_file_returns_empty(tmp_path: Path) -> None:
@@ -60,11 +96,103 @@ def test_load_groups_reads_existing_format(groups_path: Path) -> None:
     assert load_groups(groups_path) == make_groups()
 
 
-def test_load_groups_rejects_unknown_keys(groups_path: Path) -> None:
-    groups_path.write_text("- title: T\n  entries: []\n  extra: 1\n")
+def test_load_groups_accepts_cluster_file(groups_path: Path) -> None:
+    groups_path.write_text(CLUSTER_YAML)
+
+    groups = load_groups(groups_path)
+
+    assert len(groups) == 3
+    assert groups[1].title is None
+    assert groups[1].model_extra == {
+        "size": 2,
+        "novelty": None,
+        "indices": [0, 1],
+        "trend_score": 0.9,
+    }
+
+
+def test_load_groups_rejects_unknown_entry_keys(groups_path: Path) -> None:
+    groups_path.write_text(
+        "- title: T\n  entries:\n  - title: t\n    link: l\n    extra: 1\n"
+    )
 
     with pytest.raises(ValidationError):
         load_groups(groups_path)
+
+
+def test_sort_by_trend_descending_then_unscored_stable() -> None:
+    ordered = sort_by_trend(make_cluster_groups())
+
+    assert [(g.model_extra or {}).get("trend_score") for g in ordered] == [
+        0.9,
+        0.5,
+        None,
+    ]
+
+
+def test_sort_by_trend_keeps_order_without_scores() -> None:
+    assert sort_by_trend(make_groups()) == make_groups()
+
+
+def test_sort_by_trend_ignores_non_numeric_scores() -> None:
+    groups = [
+        ExpectedGroup.model_validate({"trend_score": "high", "title": "a"}),
+        ExpectedGroup.model_validate({"trend_score": True, "title": "b"}),
+        ExpectedGroup.model_validate({"trend_score": 1, "title": "c"}),
+    ]
+
+    assert [g.title for g in sort_by_trend(groups)] == ["c", "a", "b"]
+
+
+def test_save_groups_keeps_metadata_and_order(tmp_path: Path) -> None:
+    path = tmp_path / "out.yaml"
+
+    save_groups(path, make_cluster_groups())
+
+    result = saved(path)
+    assert list(result[1]) == [
+        "size",
+        "novelty",
+        "indices",
+        "trend_score",
+        "entries",
+    ]
+    assert result[1]["novelty"] is None
+    assert result[1]["indices"] == [0, 1]
+    assert list(result[2]) == ["title", "entries"]
+    assert result[2]["title"] == ""
+
+
+def test_editor_saves_groups_sorted_with_metadata(
+    cluster_editor: GroupEditor, groups_path: Path
+) -> None:
+    assert cluster_editor.toggle(2, LINK_A) is True
+
+    result = saved(groups_path)
+    assert [g.get("trend_score") for g in result] == [0.9, 0.5, None]
+    assert result[0]["indices"] == [0, 1]
+
+
+def test_rename_untitled_group_puts_title_first(
+    cluster_editor: GroupEditor, groups_path: Path
+) -> None:
+    assert cluster_editor.rename(0, "Fresh") is True
+
+    first = saved(groups_path)[0]
+    assert list(first)[0] == "title"
+    assert first["title"] == "Fresh"
+    assert first["indices"] == [0, 1]
+
+
+def test_rename_untitled_blank_writes_nothing(groups_path: Path) -> None:
+    groups_path.write_text(CLUSTER_YAML)
+    cluster_editor = GroupEditor(
+        make_entries(), load_groups(groups_path), groups_path
+    )
+
+    assert cluster_editor.rename(0, " ") is False
+
+    assert groups_path.read_text() == CLUSTER_YAML
 
 
 def test_load_entries_rejects_duplicate_links(tmp_path: Path) -> None:
@@ -175,14 +303,13 @@ def test_add_group_appends_new_group(
     assert saved(groups_path)[-1] == {"title": "New group", "entries": []}
 
 
-def test_add_group_stops_at_hotkey_limit(
-    editor: GroupEditor, groups_path: Path
-) -> None:
-    for _ in range(60):
-        editor.add_group()
+def test_add_group_stops_at_max_groups(groups_path: Path) -> None:
+    groups = [ExpectedGroup(title=f"G{i}") for i in range(MAX_GROUPS - 1)]
+    full = GroupEditor(make_entries(), groups, groups_path)
 
-    assert editor.add_group() is None
-    assert len(saved(groups_path)) == 62
+    assert full.add_group() == MAX_GROUPS - 1
+    assert full.add_group() is None
+    assert len(saved(groups_path)) == MAX_GROUPS
 
 
 def test_rename_trims_title(editor: GroupEditor, groups_path: Path) -> None:
@@ -246,4 +373,16 @@ def test_failed_save_keeps_state(tmp_path: Path) -> None:
 def test_assigned_keys_lists_all_groups_of_entry(editor: GroupEditor) -> None:
     editor.toggle(1, LINK_A)
 
-    assert editor.assigned_keys(LINK_A) == "01"
+    assert editor.assigned_keys(LINK_A) == "0 1"
+
+
+def test_assigned_keys_use_two_character_keys_past_62_groups(
+    groups_path: Path,
+) -> None:
+    groups = [ExpectedGroup(title=f"G{i}") for i in range(63)]
+    big = GroupEditor(make_entries(), groups, groups_path)
+    big.toggle(0, LINK_C)
+    big.toggle(62, LINK_C)
+
+    assert big.assigned_keys(LINK_C) == "0 Z1"
+    assert big.key_of(62) == "Z1"

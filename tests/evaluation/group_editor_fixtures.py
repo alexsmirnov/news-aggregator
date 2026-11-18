@@ -44,5 +44,29 @@ def make_groups() -> list[ExpectedGroup]:
     ]
 
 
+CLUSTER_YAML = """\
+- size: 1
+  trend_score: 0.5
+  entries:
+  - {title: Gamma <b>bold</b> & co, link: https://x/c}
+- size: 2
+  novelty: null
+  indices: [0, 1]
+  trend_score: 0.9
+  entries:
+  - {title: Alpha rises, link: https://x/a}
+  - {title: Beta falls, link: https://x/b}
+- title: ''
+  entries: []
+"""
+
+
+def make_cluster_groups() -> list[ExpectedGroup]:
+    return [
+        ExpectedGroup.model_validate(raw)
+        for raw in yaml.safe_load(CLUSTER_YAML)
+    ]
+
+
 def saved(path: Path) -> list[dict[str, Any]]:
     return yaml.safe_load(path.read_text())

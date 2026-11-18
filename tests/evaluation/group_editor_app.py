@@ -6,14 +6,17 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from group_editor import (
+    ExpectedGroup,
     GroupEditor,
     UnknownEntryError,
     UnknownGroupError,
-    hotkey,
+    assign_hotkeys,
+    is_untitled,
 )
 
 UI_DIR = Path(__file__).resolve().parent / "group_editor_ui"
 APPEND_GROUP_OOB = "beforeend:#groups"
+UNTITLED_PLACEHOLDER = "(untitled)"
 
 templates = Jinja2Templates(directory=UI_DIR)
 router = APIRouter()
@@ -26,12 +29,23 @@ def get_editor(request: Request) -> GroupEditor:
 EditorDep = Annotated[GroupEditor, Depends(get_editor)]
 
 
+def _display_title(group: ExpectedGroup) -> tuple[str, bool]:
+    """Return the title to show and whether it is only a placeholder."""
+    if not is_untitled(group):
+        return group.title or "", False
+    if group.entries:
+        return group.entries[0].title, True
+    return UNTITLED_PLACEHOLDER, True
+
+
 def _group_view(editor: GroupEditor, index: int) -> dict[str, Any]:
     group = editor.groups[index]
+    title, placeholder = _display_title(group)
     return {
         "index": index,
-        "key": hotkey(index),
-        "title": group.title,
+        "key": editor.key_of(index),
+        "title": title,
+        "placeholder": placeholder,
         "members": [
             {
                 "link": entry.link,
@@ -135,11 +149,19 @@ def remove(group: int, link: str, editor: EditorDep) -> Response:
     )
 
 
+def _keys_changed(old_count: int, new_count: int) -> bool:
+    """Whether growing the group list gave existing groups new keys."""
+    return assign_hotkeys(new_count)[:old_count] != assign_hotkeys(old_count)
+
+
 @router.post("/groups")
 def add_group(editor: EditorDep) -> Response:
+    old_count = len(editor.groups)
     index = editor.add_group()
     if index is None:
         return _no_change()
+    if _keys_changed(old_count, len(editor.groups)):
+        return Response(headers={"HX-Refresh": "true"})
     group_html = _render("_group.html", g=_group_view(editor, index))
     return _fragments(
         f'<div hx-swap-oob="{APPEND_GROUP_OOB}">{group_html}</div>'
